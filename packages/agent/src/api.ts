@@ -4,6 +4,7 @@ import { type Address, formatEther } from "viem";
 import {
   getActiveRaffles,
   getRaffleInfo,
+  getRaffleName,
   RaffleState,
 } from "./raffle-lifecycle.js";
 import { getCurrentVault } from "./scheduler.js";
@@ -12,11 +13,16 @@ import { AgentRegistryAbi, ERC20Abi, RaffleVaultAbi } from "./abis.js";
 import { config } from "./config.js";
 import { createX402Middleware } from "./x402.js";
 import { getRaffleMeta, getAllRaffleMeta, type RaffleMeta } from "./raffle-store.js";
+import { layout, stateLabel, formatCash } from "./html.js";
+import { serveStatic } from "@hono/node-server/serve-static";
 
 export function createApi(): Hono {
   const app = new Hono();
 
   app.use("/*", cors());
+
+  // Static files (mascot, images)
+  app.use("/images/*", serveStatic({ root: "./public" }));
 
   // x402 payment gate — protects POST /api/raffles/:address/enter
   // Only active when X402_ENABLED=true in .env
@@ -270,76 +276,85 @@ export function createApi(): Hono {
       });
     }
 
-    let raffleListHtml = "";
+    // Get current house raffle for the hero countdown
+    let heroHtml = "";
     try {
+      const currentVault = (await import("./scheduler.js")).getCurrentVault();
       const activeRaffles = await getActiveRaffles();
-      if (activeRaffles.length === 0) {
-        raffleListHtml = "<p>No active raffles right now. Check back soon.</p>";
+
+      if (currentVault) {
+        const info = await getRaffleInfo(currentVault);
+        const meta = getRaffleMeta(currentVault);
+        const onChainName = meta?.name || await getRaffleName(currentVault);
+        const displayName = onChainName || "House Raffle";
+        const pool = parseFloat(formatEther(info.totalPool));
+        const closesAtMs = Number(info.closesAt) * 1000;
+        const ticketPrice = formatCash(formatEther(config.raffle.ticketPrice));
+
+        heroHtml = `
+    <div class="countdown" id="timer">00:00<span class="ms">000</span></div>
+    <div class="stats">
+      ${formatCash(formatEther(info.totalPool))}<br>
+      ${info.participantCount.toString()} tickets
+    </div>
+    <a href="/raffles/${currentVault}" class="cta">Join ${ticketPrice}</a>
+    <script>
+      (function(){
+        var end = ${closesAtMs};
+        var el = document.getElementById('timer');
+        function tick(){
+          var d = end - Date.now();
+          if(d < 0) d = 0;
+          var m = Math.floor(d/60000);
+          var s = Math.floor((d%60000)/1000);
+          var ms = Math.floor(d%1000);
+          el.innerHTML = (m<10?'0':'')+m+':'+(s<10?'0':'')+s+'<span class="ms">'+(ms<100?'0':'')+(ms<10?'0':'')+ms+'</span>';
+          if(d > 0) requestAnimationFrame(tick);
+        }
+        tick();
+      })();
+    </script>`;
       } else {
-        const items = await Promise.all(
-          activeRaffles.map(async (addr) => {
-            const info = await getRaffleInfo(addr as Address);
-            const meta = getRaffleMeta(addr as string);
-            const remaining = Number(info.closesAt) - Math.floor(Date.now() / 1000);
-            const timeStr = remaining > 0 ? `${Math.floor(remaining / 60)}m ${remaining % 60}s` : "CLOSED";
-            const displayName = meta?.name || info.address.slice(0, 10) + "...";
-            const typeLabel = meta?.type === "community" ? "Community" : "House";
-            return `<li>
-              <a href="/raffles/${info.address}"><strong>${displayName}</strong></a>
-              <span>[${typeLabel} Raffle]</span> —
-              ${RaffleState[info.state]} |
-              Pool: $${formatEther(info.totalPool)} |
-              ${info.participantCount.toString()} participants |
-              ${timeStr} remaining
-            </li>`;
-          })
-        );
-        raffleListHtml = `<ul>${items.join("\n")}</ul>`;
+        heroHtml = `<div class="empty">No active house raffle. Next one starts soon.</div>`;
       }
+
+      // Other raffles section removed — focusing on house raffle hero
     } catch {
-      raffleListHtml = "<p>Failed to load raffles.</p>";
+      heroHtml = `<div class="empty">Failed to load raffles.</div>`;
     }
 
-    return c.html(`<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <title>RaffleTime — Zero-Loss Agentic Raffles</title>
-  <meta name="description" content="Provably fair onchain raffles operated by AI agents on Celo.">
-</head>
-<body>
-  <h1>RaffleTime</h1>
-  <p>Zero-loss agentic raffle platform on Celo. Provably fair, fully onchain.</p>
+    return c.html(layout("Home", `
+    <h1 class="site-title"><span>Raffle</span>time</h1>
+    <p class="site-tagline">Zero-loss sybil-resistant agentic raffles.<br>Provably fair. Fully onchain.</p>
 
-  <h2>Active Raffles</h2>
-  ${raffleListHtml}
+    ${heroHtml}
 
-  <h2>For Agents</h2>
-  <ul>
-    <li><a href="/.well-known/agent.json">Agent Discovery (ERC-8004)</a> — machine-readable agent metadata</li>
-    <li><a href="/api/raffles">GET /api/raffles</a> — JSON list of active raffles</li>
-    <li><a href="/api/raffles/current">GET /api/raffles/current</a> — current house raffle</li>
-    <li>POST /api/raffles/{address}/enter — enter via x402 payment (HTTP 402 flow)</li>
-  </ul>
+    <div class="section">
+      <h2>For Agents</h2>
+      <ol>
+        <li><strong>Register:</strong> Call <code>AgentRegistry.registerAgent(uri, bondAmount)</code> on-chain (one-time, $1 bond).</li>
+        <li><strong>Find a raffle:</strong> <code>GET <a href="/api/raffles/current">/api/raffles/current</a></code></li>
+        <li><strong>Enter via x402:</strong> <code>POST /api/raffles/{vault}/enter</code> with <code>{"beneficiaryVote": "0x..."}</code></li>
+        <li><strong>Or enter directly:</strong> Approve payment token, then <code>vault.enterRaffle(beneficiaryVote)</code> on-chain.</li>
+      </ol>
+      <p style="margin-top: 0.75rem">
+        <a href="/.well-known/agent.json">Agent Discovery (ERC-8004)</a> &middot;
+        <a href="/api/raffles">Raffles API</a> &middot;
+        <a href="/api/health">Health</a>
+      </p>
+    </div>
 
-  <h2>How to Enter (Agents)</h2>
-  <ol>
-    <li><strong>Register:</strong> Call <code>AgentRegistry.registerAgent(uri, bondAmount)</code> on-chain (one-time setup, requires $1 bond).</li>
-    <li><strong>Find a raffle:</strong> <code>GET /api/raffles/current</code> to get the active vault address.</li>
-    <li><strong>Enter via x402:</strong> <code>POST /api/raffles/{vault}/enter</code> with body <code>{"beneficiaryVote": "0x..."}</code>. If x402 is enabled, the server responds with HTTP 402 and payment requirements. Pay via x402 header and retry.</li>
-    <li><strong>Or enter directly:</strong> Approve payment token to the vault, then call <code>enterRaffle(beneficiaryVote)</code> on-chain.</li>
-  </ol>
-
-  <h2>Contracts</h2>
-  <table>
-    <tr><td>Factory</td><td><code>${config.contracts.factory}</code></td></tr>
-    <tr><td>Registry</td><td><code>${config.contracts.registry}</code></td></tr>
-    <tr><td>Agent Registry</td><td><code>${config.contracts.agentRegistry}</code></td></tr>
-    <tr><td>Payment Token</td><td><code>${config.contracts.paymentToken}</code></td></tr>
-    <tr><td>Chain</td><td>Celo (${config.chainId})</td></tr>
-  </table>
-</body>
-</html>`);
+    <div class="section">
+      <h2>Contracts</h2>
+      <table class="info-table">
+        <tr><td>Factory</td><td><code>${config.contracts.factory}</code></td></tr>
+        <tr><td>Registry</td><td><code>${config.contracts.registry}</code></td></tr>
+        <tr><td>Agent Registry</td><td><code>${config.contracts.agentRegistry}</code></td></tr>
+        <tr><td>Payment Token</td><td><code>${config.contracts.paymentToken}</code></td></tr>
+        <tr><td>Chain</td><td>Celo (${config.chainId})</td></tr>
+      </table>
+    </div>
+    `));
   });
 
   app.get("/raffles", async (c) => {
@@ -362,68 +377,68 @@ export function createApi(): Hono {
       const remaining = Number(info.closesAt) - Math.floor(Date.now() / 1000);
       const timeStr = remaining > 0 ? `${Math.floor(remaining / 60)}m ${remaining % 60}s remaining` : "ENDED";
       const stateStr = RaffleState[info.state];
-      const displayName = meta?.name || address.slice(0, 10) + "...";
+      const onChainName = meta?.name || await getRaffleName(address);
+      const displayName = onChainName || address.slice(0, 10) + "...";
       const typeLabel = meta?.type === "community" ? "Community Raffle" : "House Raffle";
 
       let actionHtml = "";
       if (info.state === RaffleState.OPEN) {
         actionHtml = `
-          <h2>Enter This Raffle</h2>
-          <h3>Option 1: x402 Payment (recommended for agents)</h3>
-          <pre>POST /api/raffles/${address}/enter
+          <div class="section">
+            <h2>Enter This Raffle</h2>
+            <h3>Option 1: x402 Payment (recommended for agents)</h3>
+            <pre><code>POST /api/raffles/${address}/enter
 Content-Type: application/json
 
-{"beneficiaryVote": "0x..."}</pre>
-          <p>The server will respond with HTTP 402 and payment requirements. Include the x402 payment header and retry.</p>
+{"beneficiaryVote": "0x..."}</code></pre>
+            <p>The server responds with HTTP 402 and payment requirements. Include the x402 payment header and retry.</p>
 
-          <h3>Option 2: Direct On-Chain</h3>
-          <ol>
-            <li>Approve payment token: <code>paymentToken.approve(${address}, ${config.raffle.ticketPrice.toString()})</code></li>
-            <li>Enter: <code>vault.enterRaffle(beneficiaryVote)</code></li>
-          </ol>`;
+            <h3>Option 2: Direct On-Chain</h3>
+            <ol>
+              <li>Approve payment token: <code>paymentToken.approve(${address}, ${config.raffle.ticketPrice.toString()})</code></li>
+              <li>Enter: <code>vault.enterRaffle(beneficiaryVote)</code></li>
+            </ol>
+          </div>`;
       } else if (info.state === RaffleState.SETTLED) {
-        actionHtml = `<h2>Results</h2><p>This raffle has been settled. Winners have been paid.</p>`;
+        actionHtml = `<div class="section"><h2>Results</h2><p>This raffle has been settled. Winners have been paid.</p></div>`;
       } else {
-        actionHtml = `<p>This raffle is currently in <strong>${stateStr}</strong> state.</p>`;
+        actionHtml = `<div class="section"><p>This raffle is currently in ${stateLabel(stateStr)} state.</p></div>`;
       }
 
-      return c.html(`<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <title>${displayName} — RaffleTime</title>
-</head>
-<body>
-  <p><a href="/">← Back to RaffleTime</a></p>
-  <h1>${displayName}</h1>
-  <p><em>${typeLabel}</em></p>${meta?.coverImage ? `\n  <img src="${meta.coverImage}" alt="${displayName}" style="max-width:400px">` : ""}
+      const pool = parseFloat(formatEther(info.totalPool));
 
-  <table>
-    <tr><td>Status</td><td><strong>${stateStr}</strong></td></tr>
-    <tr><td>Pool</td><td>$${formatEther(info.totalPool)}</td></tr>
-    <tr><td>Participants</td><td>${info.participantCount.toString()}</td></tr>
-    <tr><td>Ticket Price</td><td>$${formatEther(config.raffle.ticketPrice)}</td></tr>
-    <tr><td>Time</td><td>${timeStr}</td></tr>
-    <tr><td>Vault Address</td><td><code>${address}</code></td></tr>
-    <tr><td>Payment Token</td><td><code>${config.contracts.paymentToken}</code></td></tr>
-  </table>
+      const ticketPrice = formatEther(config.raffle.ticketPrice);
 
-  ${actionHtml}
+      return c.html(layout(displayName, `
+    <a href="/" class="back-link">&larr; Back</a>
 
-  <h2>API</h2>
-  <ul>
-    <li><a href="/api/raffles/${address}">JSON details</a></li>
-    <li><a href="/api/raffles/${address}/entry-info">Entry instructions (JSON)</a></li>
-  </ul>
-</body>
-</html>`);
+    <h1>${displayName}</h1>
+    <span class="type-badge ${meta?.type === "community" ? "community" : "house"}">${typeLabel}</span>
+
+    <table class="info-table" style="margin-top: 1.5rem">
+      <tr><td>Status</td><td>${stateLabel(stateStr)}</td></tr>
+      <tr><td>Pool</td><td>$${pool.toFixed(2)}</td></tr>
+      <tr><td>Participants</td><td>${info.participantCount.toString()}</td></tr>
+      <tr><td>Ticket Price</td><td>$${ticketPrice}</td></tr>
+      <tr><td>Time</td><td>${timeStr}</td></tr>
+      <tr><td>Vault</td><td><code>${address}</code></td></tr>
+    </table>
+
+    ${info.state === RaffleState.OPEN ? `<p style="margin: 1.5rem 0"><a href="/raffles/${address}" class="cta">Join $${ticketPrice}</a></p>` : ""}
+
+    ${actionHtml}
+
+    <p style="margin-top: 1.5rem">
+      <a href="/api/raffles/${address}">JSON details</a> &middot;
+      <a href="/api/raffles/${address}/entry-info">Entry instructions</a>
+    </p>
+    `));
     } catch (error) {
-      return c.html(`<!DOCTYPE html>
-<html><body>
-  <p><a href="/">← Back</a></p>
-  <h1>Raffle Not Found</h1>
-  <p>Could not load raffle at ${address}: ${String(error)}</p>
-</body></html>`, 404);
+      return c.html(layout("Not Found", `
+    <a href="/" class="back-link">&larr; Back to RaffleTime</a>
+    <h1>Raffle Not Found</h1>
+    <p>Could not load raffle at <code>${address}</code></p>
+      `), 404);
     }
   });
 

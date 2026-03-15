@@ -25,6 +25,7 @@ packages/agent/data/
 
 # IDE / tool settings
 .claude/
+CLAUDE.md
 .vscode/
 *.swp
 *.swo

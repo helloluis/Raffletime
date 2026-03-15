@@ -105,6 +105,37 @@ export async function getActiveRaffles(): Promise<Address[]> {
   return raffles as Address[];
 }
 
+/** Look up on-chain raffle name from the registry by scanning entries */
+export async function getRaffleName(vault: Address): Promise<string | null> {
+  try {
+    const count = (await publicClient.readContract({
+      address: config.contracts.registry,
+      abi: RaffleRegistryAbi,
+      functionName: "getRaffleCount",
+    })) as bigint;
+
+    for (let i = 0n; i < count; i++) {
+      const entry = (await publicClient.readContract({
+        address: config.contracts.registry,
+        abi: RaffleRegistryAbi,
+        functionName: "getRaffle",
+        args: [i],
+      })) as any;
+
+      // viem may return as array [vault, creator, name, ...] or object
+      const entryVault = entry.vault || entry[0];
+      const entryName = entry.name || entry[2];
+
+      if (String(entryVault).toLowerCase() === vault.toLowerCase()) {
+        return entryName || null;
+      }
+    }
+  } catch {
+    // Registry read failed
+  }
+  return null;
+}
+
 export async function isAgentRegistered(): Promise<boolean> {
   const address = getAgentAddress();
   return (await publicClient.readContract({
