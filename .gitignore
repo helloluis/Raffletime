@@ -1,0 +1,34 @@
+# Dependencies
+node_modules/
+
+# Build outputs
+dist/
+packages/web/build/
+packages/contracts/out/
+packages/contracts/cache/
+
+# Forge dependencies (managed by forge install)
+packages/contracts/lib/
+
+# Environment files (contain private keys!)
+.env
+.env.local
+.env.*.local
+packages/agent/.env
+packages/web/.env
+
+# Deployment broadcast logs (contain deployer addresses)
+packages/contracts/broadcast/
+
+# Runtime data
+packages/agent/data/
+
+# IDE / tool settings
+.claude/
+.vscode/
+*.swp
+*.swo
+
+# OS files
+.DS_Store
+Thumbs.db

@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "raffletime": {
+      "type": "stdio",
+      "command": "node",
+      "args": ["packages/mcp-server/dist/index.js"],
+      "cwd": "c:\\Users\\User\\Code\\Raffletime"
+    }
+  }
+}
