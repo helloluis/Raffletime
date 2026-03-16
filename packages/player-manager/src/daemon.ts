@@ -18,7 +18,9 @@ const MAX_PLAYERS_PER_RAFFLE = parseInt(process.env.MAX_PLAYERS || "20");
 const TARGET_REGISTERED = parseInt(process.env.TARGET_REGISTERED || "30");
 
 let lastVault: string | null = null;
-let lastEnteredVault: string | null = null;
+let earlyWaveDone: string | null = null;  // vault we've done early wave for
+let lateWaveDone: string | null = null;   // vault we've done late wave for
+let earlyWavePlayers: string[] = [];      // names entered in early wave
 
 interface AppHealth {
   status: string;
@@ -118,86 +120,101 @@ async function tick(seedPassword: string): Promise<void> {
     return;
   }
 
-  if (vault === lastEnteredVault) {
-    // Already planned entries for this raffle — check if it's time to enter the next player
-    const remaining = new Date(raffle.closesAt).getTime() - Date.now();
-    if (remaining > 0) {
-      console.log(`[daemon] Waiting... ${vault.slice(0,10)}... pool=$${raffle.totalPool} participants=${raffle.participants} (${Math.floor(remaining/60000)}m left)`);
+  // Track new raffle
+  if (vault !== lastVault) {
+    console.log(`[daemon] New raffle detected: ${vault}`);
+    lastVault = vault;
+    earlyWaveDone = null;
+    lateWaveDone = null;
+    earlyWavePlayers = [];
+    await ensureEnoughPlayers(seedPassword);
+  }
+
+  const closesAt = new Date(raffle.closesAt).getTime();
+  const now = Date.now();
+  const elapsed = now - (closesAt - 3600000); // approx time since raffle started (assuming 1h)
+  const remaining = closesAt - now;
+  const remainingMin = Math.floor(remaining / 60000);
+  const participants = parseInt(raffle.participants) || 0;
+
+  // ── EARLY WAVE: first 15 minutes, seed the pot with 2-4 house players ──
+  if (earlyWaveDone !== vault && elapsed > 60000 && remaining > 45 * 60000) {
+    earlyWaveDone = vault;
+
+    const activePlayers = getActivePlayers();
+    const numSeed = 3 + Math.floor(Math.random() * 3); // 3-5
+    const shuffled = [...activePlayers].sort(() => Math.random() - 0.5);
+    const seedPlayers = shuffled.slice(0, numSeed);
+
+    // Each player buys a random number of tickets (1-5) by entering multiple times
+    console.log(`[daemon] Early wave: entering ${seedPlayers.length} players to seed pot`);
+
+    for (const player of seedPlayers) {
+      const ticketCount = 1 + Math.floor(Math.random() * 5); // 1-5 tickets
+      try {
+        for (let t = 0; t < ticketCount; t++) {
+          const { entered } = await enterRaffle(seedPassword, vault as Address, [player]);
+          if (entered.length > 0 && t === 0) {
+            earlyWavePlayers.push(player.name);
+          }
+          if (entered.length > 0) {
+            console.log(`[daemon] ☕ ${player.name} ticket ${t+1}/${ticketCount}`);
+          }
+        }
+      } catch (e) {
+        console.log(`[daemon] ${player.name} failed: ${String(e).slice(0, 60)}`);
+      }
+      // Stagger between players (15-45s)
+      await new Promise((r) => setTimeout(r, 15000 + Math.random() * 30000));
+    }
+
+    await sendAlert(`Early wave: **${earlyWavePlayers.length}** house players seeded the pot`);
+    return;
+  }
+
+  // ── LATE WAVE: final 10 minutes, top up if organic participation is low ──
+  if (lateWaveDone !== vault && remaining < 10 * 60000 && remaining > 3 * 60000) {
+    lateWaveDone = vault;
+
+    // Check how many organic (non-house) players are in
+    const organicCount = Math.max(0, participants - earlyWavePlayers.length);
+
+    if (organicCount < 3) {
+      // Low organic activity — add more house players
+      const activePlayers = getActivePlayers();
+      const alreadyIn = new Set(earlyWavePlayers.map(n => n.toLowerCase()));
+      const available = activePlayers.filter(p => !alreadyIn.has(p.name.toLowerCase()));
+      const numExtra = 3 + Math.floor(Math.random() * 5); // 3-7 more
+      const shuffled = [...available].sort(() => Math.random() - 0.5);
+      const latePlayers = shuffled.slice(0, numExtra);
+
+      console.log(`[daemon] Late wave: ${organicCount} organic players detected, entering ${latePlayers.length} more house players`);
+
+      for (const player of latePlayers) {
+        try {
+          const check = await fetchJson<{ current: CurrentRaffle | null }>(`${APP_URL}/api/raffles/current`);
+          if (!check?.current || check.current.address !== vault || check.current.state !== "OPEN") break;
+
+          const { entered } = await enterRaffle(seedPassword, vault as Address, [player]);
+          if (entered.length > 0) {
+            console.log(`[daemon] ☕ ${entered[0]}`);
+          }
+        } catch (e) {
+          console.log(`[daemon] ${player.name} failed: ${String(e).slice(0, 60)}`);
+        }
+        await new Promise((r) => setTimeout(r, 3000 + Math.random() * 8000));
+      }
+
+      await sendAlert(`Late wave: **${latePlayers.length}** more house players entered (only ${organicCount} organic)`);
+    } else {
+      console.log(`[daemon] Late wave: ${organicCount} organic players — house players not needed`);
+      await sendAlert(`Healthy raffle: **${organicCount}** organic + **${earlyWavePlayers.length}** house players`);
     }
     return;
   }
 
-  // 4. New raffle detected — plan staggered entries
-  console.log(`[daemon] New raffle detected: ${vault}`);
-  lastVault = vault;
-  lastEnteredVault = vault;
-
-  // Ensure we have enough players
-  await ensureEnoughPlayers(seedPassword);
-
-  // Pick random number of players
-  const activePlayers = getActivePlayers();
-  const numToEnter = Math.min(
-    activePlayers.length,
-    MIN_PLAYERS_PER_RAFFLE + Math.floor(Math.random() * (MAX_PLAYERS_PER_RAFFLE - MIN_PLAYERS_PER_RAFFLE + 1))
-  );
-
-  // Shuffle and pick
-  const shuffled = [...activePlayers].sort(() => Math.random() - 0.5);
-  const selected = shuffled.slice(0, numToEnter);
-
-  // Calculate stagger: spread entries over the raffle's lifetime minus last 3 minutes
-  const closesAt = new Date(raffle.closesAt).getTime();
-  const now = Date.now();
-  const totalWindow = closesAt - now - (3 * 60 * 1000); // stop 3 min before close
-  const intervalMs = totalWindow > 0 ? Math.floor(totalWindow / selected.length) : 10000;
-
-  console.log(`[daemon] Scheduling ${selected.length} players over ${Math.floor(totalWindow/60000)}m (${Math.floor(intervalMs/1000)}s apart)`);
-
-  // Enter players one at a time with staggered delays
-  let enteredCount = 0;
-  let skippedCount = 0;
-
-  for (let i = 0; i < selected.length; i++) {
-    const player = selected[i];
-
-    // Wait for the scheduled time (except first player enters immediately)
-    if (i > 0) {
-      // Add some jitter (±20%) to look more natural
-      const jitter = intervalMs * (0.8 + Math.random() * 0.4);
-      await new Promise((r) => setTimeout(r, jitter));
-    }
-
-    // Verify raffle is still open before entering
-    try {
-      const check = await fetchJson<{ current: CurrentRaffle | null }>(`${APP_URL}/api/raffles/current`);
-      if (!check?.current || check.current.address !== vault || check.current.state !== "OPEN") {
-        console.log(`[daemon] Raffle no longer open, stopping entries`);
-        break;
-      }
-    } catch {}
-
-    try {
-      const { entered, skipped } = await enterRaffle(seedPassword, vault as Address, [player]);
-      if (entered.length > 0) {
-        enteredCount++;
-        console.log(`[daemon] ${entered[0]}`);
-      }
-      if (skipped.length > 0) {
-        skippedCount++;
-        console.log(`[daemon] Skip: ${skipped[0]}`);
-      }
-    } catch (e) {
-      console.log(`[daemon] ${player.name} failed: ${String(e).slice(0, 60)}`);
-      skippedCount++;
-    }
-  }
-
-  const summary = `Raffle entry complete: **${enteredCount}** entered, **${skippedCount}** skipped over ${Math.floor(totalWindow/60000)}m`;
-  console.log(`[daemon] ${summary}`);
-  if (enteredCount > 0) {
-    await sendAlert(summary);
-  }
+  // ── Between waves: just log status ──
+  console.log(`[daemon] ${vault.slice(0,10)}... pool=$${raffle.totalPool} participants=${participants} (${remainingMin}m left)`);
 }
 
 export async function startDaemon(): Promise<void> {
