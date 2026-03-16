@@ -1235,10 +1235,26 @@ export function createApi(): Hono {
         }
       }
 
+      async function ensureCorrectChain(){
+        var chainId = await window.ethereum.request({method:'eth_chainId'});
+        if(chainId !== CHAIN_ID){
+          await switchChain();
+          chainId = await window.ethereum.request({method:'eth_chainId'});
+          if(chainId !== CHAIN_ID){
+            throw new Error('Please switch your wallet to ${config.chainId === 42220 ? "Celo" : "Celo Sepolia"} and try again');
+          }
+        }
+      }
+
       window.runJoinFlow = async function(){
         showError('');
         setButtonDisabled(true);
         try {
+          // Verify correct chain before any transaction
+          if(window.ethereum && currentStep !== 'connect'){
+            await ensureCorrectChain();
+          }
+
           if(currentStep === 'connect'){
             if(!window.ethereum){ showError('No wallet detected. Install MetaMask or Rabby.'); setButtonDisabled(false); return; }
             setStatus('connect','active','connecting...');
