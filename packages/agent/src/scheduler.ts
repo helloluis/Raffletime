@@ -117,14 +117,7 @@ export async function runSchedulerTick(
       return;
     }
 
-    // No active raffle — create a new one
-    if (beneficiaries.length === 0) {
-      console.log(
-        "[scheduler] No beneficiaries configured, skipping raffle creation"
-      );
-      return;
-    }
-
+    // No active raffle — create a new one (beneficiaries are optional)
     const raffleName = nextHouseRaffleName();
     console.log(`[scheduler] Creating new house raffle: "${raffleName}"...`);
     currentVault = await createHouseRaffle(beneficiaries, raffleName);
