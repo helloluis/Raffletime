@@ -30,15 +30,15 @@ export const config = {
   raffle: {
     name: "House Raffle",
     description: "Hourly house raffle by RaffleTime",
-    ticketPrice: BigInt(process.env.TICKET_PRICE || "100000000000000000"), // $0.10
+    ticketPriceUsd6: BigInt(process.env.TICKET_PRICE_USD6 || "100000"), // $0.10 in 6-decimal USD
     maxEntriesPerUser: BigInt(process.env.MAX_ENTRIES_PER_USER || "3"),
     numWinners: 1n,
     winnerShareBps: BigInt(process.env.WINNER_SHARE_BPS || "10000"), // 100% to winners by default
     beneficiaryShareBps: BigInt(process.env.BENEFICIARY_SHARE_BPS || "0"), // 0% to beneficiary by default
     duration: BigInt(process.env.RAFFLE_DURATION || "3600"), // 1 hour
     targetPoolSize: BigInt(
-      process.env.TARGET_POOL_SIZE || "100000000000000000000"
-    ), // $100
+      process.env.TARGET_POOL_SIZE_USD6 || "100000000"
+    ), // $100 in 6-decimal USD
     minUniqueParticipants: 2n,
     agentsOnly: process.env.AGENTS_ONLY === "true",
   },

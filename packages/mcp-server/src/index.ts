@@ -634,8 +634,8 @@ async function handleTool(
       });
       // Step 2: Enter raffle (nonce N+1, auto-incremented)
       const enter = castSend({
-        to: vault, sig: "enterRaffle(address)",
-        args: [beneficiary], pk, rpc,
+        to: vault, sig: "enterRaffle(address,address)",
+        args: ["0x0000000000000000000000000000000000000000", beneficiary], pk, rpc,
       });
       return `=== Approve Ticket ===\n${approve}\n=== Enter Raffle ===\n${enter}`;
     }
@@ -903,8 +903,8 @@ async function handleTool(
 
           // Enter raffle
           castSend({
-            to: vault, sig: "enterRaffle(address)",
-            args: [beneficiary], pk: w.pk, rpc,
+            to: vault, sig: "enterRaffle(address,address)",
+            args: ["0x0000000000000000000000000000000000000000", beneficiary], pk: w.pk, rpc,
           });
 
           // Update registry stats

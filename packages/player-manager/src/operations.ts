@@ -36,7 +36,7 @@ const AGENT_REG_ABI = [
 ] as const;
 
 const VAULT_ABI = [
-  { name: "enterRaffle", type: "function", stateMutability: "nonpayable", inputs: [{ name: "beneficiaryVote", type: "address" }], outputs: [] },
+  { name: "enterRaffle", type: "function", stateMutability: "nonpayable", inputs: [{ name: "token", type: "address" }, { name: "beneficiaryVote", type: "address" }], outputs: [] },
   { name: "state", type: "function", stateMutability: "view", inputs: [], outputs: [{ name: "", type: "uint8" }] },
   { name: "getBeneficiaryOptions", type: "function", stateMutability: "view", inputs: [], outputs: [{ name: "", type: "address[]" }] },
 ] as const;
@@ -252,7 +252,7 @@ export async function enterRaffle(
         // Enter
         hash = await wallet.writeContract({
           address: vault, abi: VAULT_ABI, functionName: "enterRaffle",
-          args: [beneficiary],
+          args: ["0x0000000000000000000000000000000000000000" as Address, beneficiary],
         } as any);
         await publicClient.waitForTransactionReceipt({ hash });
       }

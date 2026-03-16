@@ -328,7 +328,7 @@ export async function createHouseRaffle(
   const params = {
     name: name || config.raffle.name,
     description: config.raffle.description,
-    ticketPrice: config.raffle.ticketPrice,
+    ticketPriceUsd6: config.raffle.ticketPriceUsd6,
     maxEntriesPerUser: config.raffle.maxEntriesPerUser,
     numWinners: config.raffle.numWinners,
     winnerShareBps: config.raffle.winnerShareBps,
@@ -383,7 +383,7 @@ export async function createHouseRaffle(
       state: "OPEN",
       pool: "0",
       participants: 0,
-      ticketPrice: formatEther(config.raffle.ticketPrice),
+      ticketPrice: (Number(config.raffle.ticketPriceUsd6) / 1e6).toFixed(2),
       closesAt: new Date(Date.now() + Number(duration) * 1000),
       creator: getAgentAddress(),
     });

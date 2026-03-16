@@ -13,7 +13,7 @@ import { AgentRegistryAbi, ERC20Abi, RaffleVaultAbi, RaffleRegistryAbi } from ".
 import { config } from "./config.js";
 import { createX402Middleware } from "./x402.js";
 import { getRaffleMeta, getAllRaffleMeta, type RaffleMeta } from "./raffle-store.js";
-import { layout, stateLabel, formatCash, explorerLink, houseIcon } from "./html.js";
+import { layout, stateLabel, formatCash, formatUsd6, explorerLink, houseIcon } from "./html.js";
 import { serveStatic } from "@hono/node-server/serve-static";
 import { buildAgentCard } from "./agent-cards.js";
 import * as db from "./db.js";
@@ -475,7 +475,7 @@ export function createApi(): Hono {
           totalPool: formatEther(info.totalPool),
           participants: info.participantCount.toString(),
           closesAt: new Date(Number(info.closesAt) * 1000).toISOString(),
-          ticketPrice: formatEther(config.raffle.ticketPrice),
+          ticketPrice: formatUsd6(config.raffle.ticketPriceUsd6),
           name: meta?.name || config.raffle.name,
           type: meta?.type || "house",
           coverImage: meta?.coverImage || null,
@@ -546,7 +546,7 @@ export function createApi(): Hono {
             closesAt: Number(info.closesAt) * 1000,
             name: onChainName || "House Raffle",
             type: meta?.type || "house",
-            ticketPrice: formatEther(config.raffle.ticketPrice),
+            ticketPrice: formatUsd6(config.raffle.ticketPriceUsd6),
             winners,
           };
           const json = JSON.stringify(data);
@@ -706,7 +706,7 @@ export function createApi(): Hono {
         vault: address,
         paymentToken: config.contracts.paymentToken,
       },
-      ticketPrice: config.raffle.ticketPrice.toString(),
+      ticketPrice: config.raffle.ticketPriceUsd6.toString(),
     });
   });
 
@@ -755,7 +755,7 @@ export function createApi(): Hono {
       }
     } catch {}
 
-    const ticketPrice = formatCash(formatEther(config.raffle.ticketPrice));
+    const ticketPrice = formatCash(formatUsd6(config.raffle.ticketPriceUsd6));
 
     return c.html(layout("Home", `
     <h1 class="site-title"><span>Raffle</span>time <span class="testnet-pill">Testnet</span></h1>
@@ -1101,14 +1101,14 @@ export function createApi(): Hono {
       var AGENT_REG = '${config.contracts.agentRegistry}';
       var VAULT = '${initialVault}';
       var BOND = '0x' + BigInt('${config.bondAmount}').toString(16);
-      var TICKET = '0x' + BigInt('${config.raffle.ticketPrice}').toString(16);
+      var TICKET = '0x' + BigInt('${config.raffle.ticketPriceUsd6}').toString(16);
       var CHAIN_ID = '0x' + (${config.chainId}).toString(16);
 
       var currentStep = 'connect'; // connect, register, badge, ticket, done
       var userAddr = null;
       var isRegistered = false;
       var ticketQty = 1;
-      var PRICE_NUM = ${parseFloat(formatEther(config.raffle.ticketPrice))};
+      var PRICE_NUM = ${parseFloat(formatUsd6(config.raffle.ticketPriceUsd6))};
 
       window.changeQty = function(delta){
         ticketQty = Math.max(1, Math.min(10, ticketQty + delta));
@@ -1178,11 +1178,12 @@ export function createApi(): Hono {
         var strPadded = strHex.padEnd(Math.ceil(strHex.length/64)*64,'0');
         return sig + '0000000000000000000000000000000000000000000000000000000000000040' + bondHex + strLen + strPadded;
       }
-      // enterRaffle(address)
-      function encodeEnterRaffle(beneficiary){
-        var sig = '0x4d827e08';
-        var addr = beneficiary.slice(2).padStart(64,'0');
-        return sig + addr;
+      // enterRaffle(address token, address beneficiaryVote)
+      function encodeEnterRaffle(token, beneficiary){
+        var sig = '0xd93a855a';
+        var t = token.slice(2).padStart(64,'0');
+        var b = beneficiary.slice(2).padStart(64,'0');
+        return sig + t + b;
       }
       // isRegistered(address)
       function encodeIsRegistered(addr){
@@ -1287,7 +1288,7 @@ export function createApi(): Hono {
               setStatus('ticket','active','ticket '+(t+1)+'/'+ticketQty+' approving...');
               await window.ethereum.request({method:'eth_sendTransaction',params:[{from:userAddr,to:TOKEN,data:encodeApprove(VAULT,TICKET)}]});
               setStatus('ticket','active','ticket '+(t+1)+'/'+ticketQty+' entering...');
-              await window.ethereum.request({method:'eth_sendTransaction',params:[{from:userAddr,to:VAULT,data:encodeEnterRaffle('0x0000000000000000000000000000000000000000')}]});
+              await window.ethereum.request({method:'eth_sendTransaction',params:[{from:userAddr,to:VAULT,data:encodeEnterRaffle(TOKEN, '0x0000000000000000000000000000000000000000')}]});
             }
             setStatus('ticket','done', ticketQty + ' ticket' + (ticketQty > 1 ? 's' : '') + ' bought');
             currentStep = 'done';
@@ -1382,7 +1383,7 @@ Content-Type: application/json
 
             <h3>Option 2: Direct On-Chain</h3>
             <ol>
-              <li>Approve payment token: <code>paymentToken.approve(${address}, ${config.raffle.ticketPrice.toString()})</code></li>
+              <li>Approve payment token: <code>paymentToken.approve(${address}, ${config.raffle.ticketPriceUsd6.toString()})</code></li>
               <li>Enter: <code>vault.enterRaffle(beneficiaryVote)</code></li>
             </ol>
           </div>`;
@@ -1411,7 +1412,7 @@ Content-Type: application/json
 
       const pool = parseFloat(formatEther(info.totalPool));
 
-      const ticketPrice = formatEther(config.raffle.ticketPrice);
+      const ticketPrice = formatUsd6(config.raffle.ticketPriceUsd6);
 
       return c.html(layout(displayName, `
     <a href="/" class="back-link">&larr; Back</a>
@@ -1502,7 +1503,7 @@ Content-Type: application/json
           address: config.contracts.paymentToken,
           abi: ERC20Abi,
           functionName: "approve",
-          args: [vaultAddress, config.raffle.ticketPrice],
+          args: [vaultAddress, config.raffle.ticketPriceUsd6],
         } as any);
         await publicClient.waitForTransactionReceipt({ hash: approveHash });
 
@@ -1511,7 +1512,7 @@ Content-Type: application/json
           address: vaultAddress,
           abi: RaffleVaultAbi,
           functionName: "enterRaffle",
-          args: [beneficiaryVote],
+          args: ["0x0000000000000000000000000000000000000000", beneficiaryVote], // token=0x0 uses first accepted
         } as any);
         const receipt = await publicClient.waitForTransactionReceipt({
           hash: enterHash,

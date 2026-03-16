@@ -41,7 +41,7 @@ export function createX402Middleware() {
     new ExactEvmScheme()
   );
 
-  const ticketPriceUsd = formatTicketPrice(config.raffle.ticketPrice);
+  const ticketPriceUsd = formatTicketPrice(config.raffle.ticketPriceUsd6);
 
   return paymentMiddleware(
     {

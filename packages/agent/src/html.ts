@@ -468,6 +468,12 @@ export function explorerLink(address: string, chainId: number): string {
   return `<a href="${base}${address}" target="_blank" style="color:inherit"><code>${address}</code></a>`;
 }
 
+/** Format a usd6 value (6-decimal USD) as a cash price string like "$0.10" */
+export function formatUsd6(usd6: bigint | string | number): string {
+  const n = typeof usd6 === "bigint" ? Number(usd6) : typeof usd6 === "string" ? parseFloat(usd6) : usd6;
+  return `$${(n / 1e6).toFixed(2)}`;
+}
+
 /** Format a wei value as a cash price string like "$0.10" */
 export function formatPrice(wei: bigint | string): string {
   const eth = typeof wei === "string" ? parseFloat(wei) : parseFloat(wei.toString()) / 1e18;

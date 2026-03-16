@@ -12,7 +12,7 @@ export const RaffleFactoryAbi = [
         components: [
           { name: "name", type: "string" },
           { name: "description", type: "string" },
-          { name: "ticketPrice", type: "uint256" },
+          { name: "ticketPriceUsd6", type: "uint256" },
           { name: "maxEntriesPerUser", type: "uint256" },
           { name: "numWinners", type: "uint256" },
           { name: "winnerShareBps", type: "uint256" },
@@ -118,8 +118,25 @@ export const RaffleVaultAbi = [
     name: "enterRaffle",
     type: "function",
     stateMutability: "nonpayable",
-    inputs: [{ name: "beneficiaryVote", type: "address" }],
+    inputs: [
+      { name: "token", type: "address" },
+      { name: "beneficiaryVote", type: "address" },
+    ],
     outputs: [],
+  },
+  {
+    name: "getAcceptedTokens",
+    type: "function",
+    stateMutability: "view",
+    inputs: [],
+    outputs: [{ name: "", type: "address[]" }],
+  },
+  {
+    name: "ticketPriceUsd6",
+    type: "function",
+    stateMutability: "view",
+    inputs: [],
+    outputs: [{ name: "", type: "uint256" }],
   },
   {
     name: "closeRaffle",
