@@ -839,17 +839,19 @@ export function createApi(): Hono {
         }
       });
 
-      // Typewriter animation for phase labels
+      // Typewriter animation for phase labels — with generation guard
+      var typeGeneration = 0;
       function typewrite(text, el){
+        var gen = ++typeGeneration;
         var i = 0;
         el.textContent = '';
         var iv = setInterval(function(){
+          if(gen !== typeGeneration){ clearInterval(iv); return; } // stale, self-terminate
           if(i <= text.length){
             el.textContent = text.slice(0, i) + (i < text.length ? '_' : '');
             i++;
           } else {
-            // Pause, then restart
-            setTimeout(function(){ i = 0; }, 800);
+            setTimeout(function(){ if(gen === typeGeneration) i = 0; }, 800);
           }
         }, 100);
         return iv;
@@ -1327,9 +1329,10 @@ export function createApi(): Hono {
           ? `<tr><td>cUSD</td><td>${explorerLink("0x765DE816845861e75A25fCA122bb6898B8B1282a", config.chainId)}</td></tr>
         <tr><td>USDC</td><td>${explorerLink("0xcebA9300f2b948710d2653dD7B07f33A8B32118C", config.chainId)}</td></tr>
         <tr><td>USDT</td><td>${explorerLink("0x48065fbBE25f71C9282ddf5e1cD6D6A887483D5e", config.chainId)}</td></tr>`
-          : `<tr><td>Fake-cUSD</td><td>${explorerLink(config.contracts.paymentToken, config.chainId)}</td></tr>`
+          : `<tr><td>USDC</td><td>${explorerLink("0x01C5C0122039549AD1493B8220cABEdD739BC44E", config.chainId)}</td></tr>
+        <tr><td>Fake-cUSD</td><td>${explorerLink(config.contracts.paymentToken, config.chainId)}</td></tr>`
         }
-        <tr><td>Chain</td><td>Celo (${config.chainId})</td></tr>
+        <tr><td>Chain</td><td>${config.chainId === 42220 ? "Celo Mainnet" : config.chainId === 11142220 ? "Celo Sepolia Testnet" : "Celo (" + config.chainId + ")"}</td></tr>
       </table>
     </div>
 
