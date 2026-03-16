@@ -72,7 +72,8 @@ async function buildPrevRafflesHtml(): Promise<string> {
           winnerHtml = "—";
         } else if (state === 5) {
           statusHtml = dateStr;
-          // Read winner from DB (fast) with fallback to on-chain
+          // Read winner — DB first, then on-chain fallback (separate try/catch)
+          let foundWinner = false;
           try {
             const dbResult = await db.getResult(vault);
             if (dbResult?.winner) {
@@ -82,15 +83,18 @@ async function buildPrevRafflesHtml(): Promise<string> {
               winnerHtml = wName
                 ? `${houseIcon}<strong>${wName}</strong> <a href="https://sepolia.celoscan.io/address/${w}" target="_blank" style="color:inherit">${short}</a>`
                 : `<a href="https://sepolia.celoscan.io/address/${w}" target="_blank">${short}</a>`;
-            } else {
-              // Fallback to on-chain
+              foundWinner = true;
+            }
+          } catch {}
+          if (!foundWinner) {
+            try {
               const winners = (await publicClient.readContract({ address: vault, abi: RaffleVaultAbi, functionName: "getWinners" })) as string[];
               if (winners.length > 0) {
                 const w = winners[0];
                 winnerHtml = `<a href="https://sepolia.celoscan.io/address/${w}" target="_blank">${w.slice(0,6)}...${w.slice(-4)}</a>`;
               }
-            }
-          } catch {}
+            } catch {}
+          }
         } else if (state === 6) {
           statusHtml = dateStr;
           winnerHtml = "<em>Invalid</em>";
