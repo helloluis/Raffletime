@@ -13,7 +13,7 @@ import { AgentRegistryAbi, ERC20Abi, RaffleVaultAbi } from "./abis.js";
 import { config } from "./config.js";
 import { createX402Middleware } from "./x402.js";
 import { getRaffleMeta, getAllRaffleMeta, type RaffleMeta } from "./raffle-store.js";
-import { layout, stateLabel, formatCash } from "./html.js";
+import { layout, stateLabel, formatCash, explorerLink } from "./html.js";
 import { serveStatic } from "@hono/node-server/serve-static";
 
 export function createApi(): Hono {
@@ -110,7 +110,14 @@ export function createApi(): Hono {
   });
 
   app.get("/api/raffles/current", async (c) => {
-    const vault = getCurrentVault();
+    let vault = getCurrentVault();
+    // In read-only mode, find active raffle from on-chain registry
+    if (!vault) {
+      try {
+        const active = await getActiveRaffles();
+        if (active.length > 0) vault = active[0] as Address;
+      } catch {}
+    }
     if (!vault) {
       return c.json({ current: null, message: "No active house raffle" });
     }
@@ -139,26 +146,8 @@ export function createApi(): Hono {
     }
   });
 
-  app.get("/api/raffles/:address", async (c) => {
-    const address = c.req.param("address") as Address;
-    try {
-      const info = await getRaffleInfo(address);
-      return c.json({
-        address: info.address,
-        state: RaffleState[info.state],
-        totalPool: formatEther(info.totalPool),
-        participants: info.participantCount.toString(),
-        closesAt: new Date(Number(info.closesAt) * 1000).toISOString(),
-      });
-    } catch (error) {
-      return c.json(
-        { error: "Invalid raffle address", details: String(error) },
-        500
-      );
-    }
-  });
-
   // ============ SSE: Live raffle updates ============
+  // MUST be defined before /api/raffles/:address to avoid route collision
 
   app.get("/api/raffles/live", async (c) => {
     const { streamSSE } = await import("hono/streaming");
@@ -166,7 +155,14 @@ export function createApi(): Hono {
       let lastJson = "";
       const send = async () => {
         try {
-          const vault = (await import("./scheduler.js")).getCurrentVault();
+          let vault = (await import("./scheduler.js")).getCurrentVault();
+          // In read-only mode, find active raffle from on-chain registry
+          if (!vault) {
+            try {
+              const active = await getActiveRaffles();
+              if (active.length > 0) vault = active[0] as Address;
+            } catch {}
+          }
           if (!vault) {
             const json = JSON.stringify({ state: "WAITING", vault: null });
             if (json !== lastJson) {
@@ -225,6 +221,25 @@ export function createApi(): Hono {
         await send();
       }
     });
+  });
+
+  app.get("/api/raffles/:address", async (c) => {
+    const address = c.req.param("address") as Address;
+    try {
+      const info = await getRaffleInfo(address);
+      return c.json({
+        address: info.address,
+        state: RaffleState[info.state],
+        totalPool: formatEther(info.totalPool),
+        participants: info.participantCount.toString(),
+        closesAt: new Date(Number(info.closesAt) * 1000).toISOString(),
+      });
+    } catch (error) {
+      return c.json(
+        { error: "Invalid raffle address", details: String(error) },
+        500
+      );
+    }
   });
 
   // ============ Raffle metadata ============
@@ -352,7 +367,14 @@ export function createApi(): Hono {
     let initialState = "OPEN";
     let initialVault = "";
     try {
-      const currentVault = (await import("./scheduler.js")).getCurrentVault();
+      let currentVault = (await import("./scheduler.js")).getCurrentVault();
+      // In read-only mode, find active raffle from on-chain registry
+      if (!currentVault) {
+        try {
+          const active = await getActiveRaffles();
+          if (active.length > 0) currentVault = active[0] as Address;
+        } catch {}
+      }
       if (currentVault) {
         const info = await getRaffleInfo(currentVault);
         initialPool = formatEther(info.totalPool);
@@ -372,7 +394,7 @@ export function createApi(): Hono {
     <div id="hero">
       <div class="countdown" id="timer">00:00<span class="ms">000</span></div>
       <div class="stats" id="stats">
-        <span id="pool">${formatCash(initialPool)}</span><br>
+        <span id="pool">${formatCash(initialPool)}</span> <span class="spec-pill">House</span> <span class="spec-pill">1x Winner</span><br>
         <span id="participants">${initialParticipants}</span> participants
       </div>
       <div id="join-area">
@@ -548,10 +570,10 @@ export function createApi(): Hono {
     <div class="section">
       <h2>Contracts</h2>
       <table class="info-table">
-        <tr><td>Factory</td><td><code>${config.contracts.factory}</code></td></tr>
-        <tr><td>Registry</td><td><code>${config.contracts.registry}</code></td></tr>
-        <tr><td>Agent Registry</td><td><code>${config.contracts.agentRegistry}</code></td></tr>
-        <tr><td>Payment Token</td><td><code>${config.contracts.paymentToken}</code></td></tr>
+        <tr><td>Factory</td><td>${explorerLink(config.contracts.factory, config.chainId)}</td></tr>
+        <tr><td>Registry</td><td>${explorerLink(config.contracts.registry, config.chainId)}</td></tr>
+        <tr><td>Agent Registry</td><td>${explorerLink(config.contracts.agentRegistry, config.chainId)}</td></tr>
+        <tr><td>Payment Token</td><td>${explorerLink(config.contracts.paymentToken, config.chainId)}</td></tr>
         <tr><td>Chain</td><td>Celo (${config.chainId})</td></tr>
       </table>
     </div>
@@ -622,7 +644,7 @@ Content-Type: application/json
       <tr><td>Participants</td><td>${info.participantCount.toString()}</td></tr>
       <tr><td>Ticket Price</td><td>$${ticketPrice}</td></tr>
       <tr><td>Time</td><td>${timeStr}</td></tr>
-      <tr><td>Vault</td><td><code>${address}</code></td></tr>
+      <tr><td>Vault</td><td>${explorerLink(address, config.chainId)}</td></tr>
     </table>
 
     ${info.state === RaffleState.OPEN ? `<p style="margin: 1.5rem 0"><a href="/raffles/${address}" class="cta">Join $${ticketPrice}</a></p>` : ""}

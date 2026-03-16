@@ -163,6 +163,18 @@ export function layout(title: string, body: string): string {
       margin-top: 0.5rem;
     }
 
+    .spec-pill {
+      font-family: 'Space Mono', monospace;
+      font-size: 0.6rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      background: #999;
+      color: #fff;
+      padding: 2px 8px;
+      vertical-align: middle;
+    }
+
     .type-badge.house { background: #999; color: #fff; }
     .type-badge.community { background: #8b1a11; color: #fff; }
 
@@ -284,6 +296,17 @@ export function layout(title: string, body: string): string {
   </div>
 </body>
 </html>`;
+}
+
+/** Get block explorer URL for an address */
+export function explorerLink(address: string, chainId: number): string {
+  const explorers: Record<number, string> = {
+    42220: "https://celoscan.io/address/",
+    44787: "https://alfajores.celoscan.io/address/",
+    11142220: "https://sepolia.celoscan.io/address/",
+  };
+  const base = explorers[chainId] || "https://sepolia.celoscan.io/address/";
+  return `<a href="${base}${address}" target="_blank" style="color:inherit"><code>${address}</code></a>`;
 }
 
 /** Format a wei value as a cash price string like "$0.10" */

@@ -24,6 +24,9 @@ async function main() {
     console.log("\nStarting API server in read-only mode...\n");
   } else if (!config.privateKey) {
     console.log("\n[READ-ONLY MODE] No PRIVATE_KEY set. API only.\n");
+  } else if (process.env.READONLY === "true") {
+    console.log("\n[READ-ONLY MODE] READONLY=true. Tracking on-chain state without creating raffles.");
+    console.log("[READ-ONLY MODE] SSE and API endpoints active. Connect to testnet.raffletime.io for live data.\n");
   } else {
     // Full mode — register agent and start scheduler
     try {

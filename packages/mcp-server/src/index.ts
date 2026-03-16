@@ -404,6 +404,28 @@ const tools = [
       properties: {},
     },
   },
+  {
+    name: "simulate_raffle",
+    description:
+      "Simulate multiple agents joining the current live raffle. Generates random wallets, funds them with CELO and stablecoins, registers them (bond + soulbound NFT), and enters them into the active raffle. Each agent gets a random number of tickets (1 to max_tickets). Returns a summary of all participants.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        num_agents: {
+          type: "number",
+          description: "Number of test agents to create and enter (default: random 3-8)",
+        },
+        max_tickets: {
+          type: "number",
+          description: "Max tickets per agent (randomly assigned 1 to max_tickets, default: 1)",
+        },
+        vault: {
+          type: "string",
+          description: "Vault address to enter (default: current active raffle from agent API)",
+        },
+      },
+    },
+  },
 ];
 
 // ============ Tool handlers ============
@@ -632,6 +654,137 @@ async function handleTool(
       } catch {
         return "Agent is NOT running (health check failed).";
       }
+    }
+
+    case "simulate_raffle": {
+      const env = getEnv();
+      const pk = getPrivateKey();
+      const token = env.PAYMENT_TOKEN_ADDRESS;
+      const agentReg = env.AGENT_REGISTRY_ADDRESS;
+      const bond = "1000000000000000000"; // 1e18 = $1
+      const ticketPrice = env.TICKET_PRICE || "100000000000000000"; // 0.1
+
+      // Determine vault — use provided or fetch from agent API
+      let vault = args.vault as string;
+      if (!vault) {
+        try {
+          const health = execSync("curl -s http://localhost:3000/api/raffles/current", {
+            encoding: "utf-8", timeout: 5000,
+          });
+          const parsed = JSON.parse(health);
+          vault = parsed?.current?.address;
+        } catch {}
+      }
+      if (!vault) {
+        // Try from on-chain registry
+        vault = exec(`"${CAST}" call ${env.REGISTRY_ADDRESS} "getActiveRaffles()(address[])" --rpc-url ${rpc}`).trim();
+        // Parse first address from array
+        const match = vault.match(/0x[0-9a-fA-F]{40}/);
+        vault = match ? match[0] : "";
+      }
+      if (!vault) throw new Error("No active raffle found. Start the house agent first.");
+
+      // Determine agent count and max tickets
+      const numAgents = (args.num_agents as number) || (Math.floor(Math.random() * 6) + 3); // 3-8
+      const maxTickets = (args.max_tickets as number) || 1;
+
+      const results: string[] = [];
+      results.push(`=== Simulating ${numAgents} agents entering raffle ${vault} ===\n`);
+
+      // Generate wallets
+      const wallets: { address: string; pk: string; tickets: number }[] = [];
+      for (let i = 0; i < numAgents; i++) {
+        const output = exec(`"${CAST}" wallet new`);
+        const addrMatch = output.match(/Address:\s+(0x[0-9a-fA-F]{40})/);
+        const pkMatch = output.match(/Private key:\s+(0x[0-9a-fA-F]{64})/);
+        if (!addrMatch || !pkMatch) throw new Error(`Failed to generate wallet ${i}`);
+        const tickets = Math.floor(Math.random() * maxTickets) + 1;
+        wallets.push({ address: addrMatch[1], pk: pkMatch[1], tickets });
+      }
+
+      results.push(`Generated ${wallets.length} wallets:`);
+      wallets.forEach((w, i) => results.push(`  Agent ${i+1}: ${w.address} (${w.tickets} ticket${w.tickets > 1 ? 's' : ''})`));
+      results.push('');
+
+      // Fund all wallets with CELO (sequentially from house agent to avoid nonce races)
+      results.push("--- Funding CELO ---");
+      for (const w of wallets) {
+        castSend({ to: w.address, pk, rpc, value: "100000000000000000" }); // 0.1 CELO
+        results.push(`  ${w.address.slice(0,10)}... funded 0.1 CELO`);
+      }
+      results.push('');
+
+      // Mint tokens to all wallets (bond + tickets worth)
+      results.push("--- Minting stablecoins ---");
+      for (const w of wallets) {
+        const amount = BigInt(bond) + (BigInt(ticketPrice) * BigInt(w.tickets));
+        castSend({
+          to: token, sig: "mint(address,uint256)",
+          args: [w.address, amount.toString()], pk, rpc,
+        });
+        results.push(`  ${w.address.slice(0,10)}... minted ${(Number(amount) / 1e18).toFixed(2)} tokens`);
+      }
+      results.push('');
+
+      // Register each agent (approve bond + registerAgent) — each wallet has nonce 0
+      results.push("--- Registering agents (bond + soulbound NFT) ---");
+      for (let i = 0; i < wallets.length; i++) {
+        const w = wallets[i];
+        const addr = w.address;
+        const agentPk = w.pk;
+
+        // Approve bond (nonce 0)
+        castSend({
+          to: token, sig: "approve(address,uint256)",
+          args: [agentReg, bond], pk: agentPk, rpc,
+        });
+
+        // Register (nonce 1)
+        castSend({
+          to: agentReg, sig: "registerAgent(string,uint256)",
+          args: [`"https://example.com/test-agent-${i+1}.json"`, bond], pk: agentPk, rpc,
+        });
+
+        results.push(`  Agent ${i+1} registered: ${addr.slice(0,10)}...`);
+      }
+      results.push('');
+
+      // Enter raffle with each agent
+      results.push("--- Entering raffle ---");
+      for (let i = 0; i < wallets.length; i++) {
+        const w = wallets[i];
+        const agentPk = w.pk;
+
+        for (let t = 0; t < w.tickets; t++) {
+          // Approve ticket (nonce increments from register: 2 + 2*t)
+          castSend({
+            to: token, sig: "approve(address,uint256)",
+            args: [vault, ticketPrice], pk: agentPk, rpc,
+          });
+
+          // Enter raffle
+          castSend({
+            to: vault, sig: "enterRaffle(address)",
+            args: ["0x0000000000000000000000000000000000000000"], pk: agentPk, rpc,
+          });
+
+          results.push(`  Agent ${i+1} bought ticket ${t+1}/${w.tickets}`);
+        }
+      }
+      results.push('');
+
+      // Final status
+      try {
+        const state = exec(`"${CAST}" call ${vault} "state()(uint8)" --rpc-url ${rpc}`).trim();
+        const pool = exec(`"${CAST}" call ${vault} "totalPool()(uint256)" --rpc-url ${rpc}`).trim();
+        const participants = exec(`"${CAST}" call ${vault} "getParticipantCount()(uint256)" --rpc-url ${rpc}`).trim();
+        results.push(`=== Raffle Status ===`);
+        results.push(`  State: ${state}`);
+        results.push(`  Pool: ${pool} wei`);
+        results.push(`  Participants: ${participants}`);
+      } catch {}
+
+      return results.join("\n");
     }
 
     default:
