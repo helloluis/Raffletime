@@ -1325,14 +1325,11 @@ export function createApi(): Hono {
         <tr><td>Factory</td><td>${explorerLink(config.contracts.factory, config.chainId)}</td></tr>
         <tr><td>Registry</td><td>${explorerLink(config.contracts.registry, config.chainId)}</td></tr>
         <tr><td>Agent Registry</td><td>${explorerLink(config.contracts.agentRegistry, config.chainId)}</td></tr>
-        ${config.chainId === 42220
-          ? `<tr><td>cUSD</td><td>${explorerLink("0x765DE816845861e75A25fCA122bb6898B8B1282a", config.chainId)}</td></tr>
-        <tr><td>USDC</td><td>${explorerLink("0xcebA9300f2b948710d2653dD7B07f33A8B32118C", config.chainId)}</td></tr>
-        <tr><td>USDT</td><td>${explorerLink("0x48065fbBE25f71C9282ddf5e1cD6D6A887483D5e", config.chainId)}</td></tr>`
-          : `<tr><td>USDC</td><td>${explorerLink("0x01C5C0122039549AD1493B8220cABEdD739BC44E", config.chainId)}</td></tr>
-        <tr><td>Fake-cUSD</td><td>${explorerLink(config.contracts.paymentToken, config.chainId)}</td></tr>`
-        }
-        <tr><td>Chain</td><td>${config.chainId === 42220 ? "Celo Mainnet" : config.chainId === 11142220 ? "Celo Sepolia Testnet" : "Celo (" + config.chainId + ")"}</td></tr>
+        <tr><td>Accepted Tokens</td><td>${config.chainId === 42220
+            ? `USDC (<a href="https://celoscan.io/address/0xcebA9300f2b948710d2653dD7B07f33A8B32118C" target="_blank" style="color:inherit">0xcebA...118C</a>)<br>cUSD (<a href="https://celoscan.io/address/0x765DE816845861e75A25fCA122bb6898B8B1282a" target="_blank" style="color:inherit">0x765D...282a</a>)<br>USDT (<a href="https://celoscan.io/address/0x48065fbBE25f71C9282ddf5e1cD6D6A887483D5e" target="_blank" style="color:inherit">0x4806...3D5e</a>)`
+            : `USDC (<a href="https://sepolia.celoscan.io/address/0x01C5C0122039549AD1493B8220cABEdD739BC44E" target="_blank" style="color:inherit">0x01C5...BC44E</a>)<br>Fake-cUSD (<a href="https://sepolia.celoscan.io/address/0xf88EDC1246f338c1eDbb6EA1853B8B43471Df4EA" target="_blank" style="color:inherit">0xf88E...f4EA</a>)`
+          }</td></tr>
+        <tr><td>Chain</td><td>${config.chainId === 42220 ? "Celo Mainnet (42220)" : config.chainId === 11142220 ? "Celo Sepolia Testnet (11142220)" : "Celo (" + config.chainId + ")"}</td></tr>
       </table>
     </div>
 
