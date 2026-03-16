@@ -23,8 +23,8 @@ export const config = {
     process.env.AGENT_URI ||
     "https://raffletime.io/.well-known/house-agent.json",
 
-  // Admission bond (minimum $1, default $1)
-  bondAmount: BigInt(process.env.BOND_AMOUNT || "1000000000000000000"), // 1e18 = $1
+  // Admission bond — $1 USDC (6 decimals = 1e6)
+  bondAmount: BigInt(process.env.BOND_AMOUNT || "1000000"),
 
   // Raffle defaults
   raffle: {

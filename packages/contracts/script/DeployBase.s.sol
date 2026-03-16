@@ -55,8 +55,9 @@ contract DeployBase is Script {
         BeneficiaryRegistry beneficiaryRegistry = new BeneficiaryRegistry();
         console.log("BeneficiaryRegistry:", address(beneficiaryRegistry));
 
-        // AgentRegistry uses USDC for staking, $1 bond = 1e6
-        AgentRegistry agentRegistry = new AgentRegistry(usdc, 1e6);
+        // AgentRegistry uses MockERC20 for testnet bonds (18 decimals, $1 bond = 1e18)
+        // On mainnet, switch to USDC: new AgentRegistry(usdc, 1e6)
+        AgentRegistry agentRegistry = new AgentRegistry(address(mockToken), 1e18);
         console.log("AgentRegistry:", address(agentRegistry));
 
         TicketNFT ticketNFT = new TicketNFT();
