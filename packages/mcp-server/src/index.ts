@@ -484,13 +484,21 @@ const tools = [
   {
     name: "simulate_raffle",
     description:
-      "Simulate multiple agents joining the current live raffle. Generates random wallets, funds them with CELO and stablecoins, registers them (bond + soulbound NFT), and enters them into the active raffle. Each agent gets a random number of tickets (1 to max_tickets). Returns a summary of all participants.",
+      "Simulate agents joining the current live raffle. Mix of new beginners (need registration) and existing agents (already registered, reused from wallet registry). Each agent gets a random number of tickets (1 to max_tickets).",
     inputSchema: {
       type: "object" as const,
       properties: {
+        new_agents: {
+          type: "number",
+          description: "Number of brand-new agents to create, fund, register, and enter (default: 0)",
+        },
+        existing_agents: {
+          type: "number",
+          description: "Number of existing registered agents to reuse from the wallet registry (default: 0)",
+        },
         num_agents: {
           type: "number",
-          description: "Number of test agents to create and enter (default: random 3-8)",
+          description: "Total agents if you don't care about the mix (splits randomly between new and existing). Ignored if new_agents or existing_agents is set.",
         },
         max_tickets: {
           type: "number",
@@ -761,30 +769,37 @@ async function handleTool(
       }
       if (!vault) throw new Error("No active raffle found. Start the house agent first.");
 
-      // Determine agent count and max tickets
-      const numAgents = (args.num_agents as number) || (Math.floor(Math.random() * 6) + 3); // 3-8
+      // Determine agent counts
       const maxTickets = (args.max_tickets as number) || 1;
+      let numNew = (args.new_agents as number) || 0;
+      let numExisting = (args.existing_agents as number) || 0;
 
-      const results: string[] = [];
-      results.push(`=== Simulating ${numAgents} agents entering raffle ${vault} ===\n`);
-
-      const registry = loadWalletRegistry();
-
-      // Reuse existing unregistered wallets or generate new ones
-      const wallets: { name: string; address: string; pk: string; tickets: number; isNew: boolean }[] = [];
-
-      // First try to reuse registered agents from the registry
-      const existingRegistered = Object.values(registry).filter(w => w.registered);
-      let reused = 0;
-      for (const w of existingRegistered) {
-        if (wallets.length >= numAgents) break;
-        const tickets = Math.floor(Math.random() * maxTickets) + 1;
-        wallets.push({ name: w.name, address: w.address, pk: w.privateKey, tickets, isNew: false });
-        reused++;
+      // If neither specified, use num_agents with random split
+      if (numNew === 0 && numExisting === 0) {
+        const total = (args.num_agents as number) || (Math.floor(Math.random() * 6) + 3);
+        const registrySnapshot = loadWalletRegistry();
+        const availableExisting = Object.values(registrySnapshot).filter(w => w.registered).length;
+        numExisting = Math.min(total, availableExisting);
+        numNew = total - numExisting;
       }
 
-      // Generate fresh wallets for the remainder
-      for (let i = wallets.length; i < numAgents; i++) {
+      const numAgents = numNew + numExisting;
+      const results: string[] = [];
+      results.push(`=== Simulating ${numAgents} agents (${numNew} new, ${numExisting} existing) entering raffle ${vault} ===\n`);
+
+      const registry = loadWalletRegistry();
+      const wallets: { name: string; address: string; pk: string; tickets: number; isNew: boolean }[] = [];
+
+      // Pick existing registered agents
+      const existingRegistered = Object.values(registry).filter(w => w.registered);
+      for (let i = 0; i < numExisting && i < existingRegistered.length; i++) {
+        const w = existingRegistered[i];
+        const tickets = Math.floor(Math.random() * maxTickets) + 1;
+        wallets.push({ name: w.name, address: w.address, pk: w.privateKey, tickets, isNew: false });
+      }
+
+      // Generate fresh wallets for beginners
+      for (let i = 0; i < numNew; i++) {
         const output = exec(`"${CAST}" wallet new`);
         const addrMatch = output.match(/Address:\s+(0x[0-9a-fA-F]{40})/);
         const pkMatch = output.match(/Private key:\s+(0x[0-9a-fA-F]{64})/);
@@ -808,8 +823,10 @@ async function handleTool(
       }
       saveWalletRegistry(registry);
 
-      if (reused > 0) results.push(`Reusing ${reused} existing agents, creating ${numAgents - reused} new ones:`);
-      else results.push(`Created ${numAgents} new agents:`);
+      const reused = wallets.filter(w => !w.isNew).length;
+      if (reused > 0 && numNew > 0) results.push(`${reused} returning players + ${numNew} beginners:`);
+      else if (reused > 0) results.push(`${reused} returning players:`);
+      else results.push(`${numNew} beginners:`);
       wallets.forEach((w) => results.push(`  ${w.name.padEnd(16)} ${w.address} (${w.tickets} ticket${w.tickets > 1 ? 's' : ''})${w.isNew ? '' : ' [reused]'}`));
       results.push('');
 
