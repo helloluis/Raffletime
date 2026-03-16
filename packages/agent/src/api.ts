@@ -19,7 +19,7 @@ import { buildAgentCard } from "./agent-cards.js";
 import * as db from "./db.js";
 
 /** Build HTML table of all raffles (active + settled + invalid) */
-async function buildRafflesTableHtml(opts: { limit?: number; page?: number; showPagination?: boolean } = {}): Promise<string> {
+async function buildRafflesTableHtml(opts: { limit?: number; page?: number; showPagination?: boolean; hoursBack?: number } = {}): Promise<string> {
   const PAGE_SIZE = opts.limit || 5;
   const page = opts.page || 1;
   try {
@@ -61,6 +61,13 @@ async function buildRafflesTableHtml(opts: { limit?: number; page?: number; show
 
         const closesAt = Number(entry.closesAt || entry[4]);
         const dt = new Date(closesAt * 1000);
+
+        // Skip raffles older than hoursBack
+        if (opts.hoursBack) {
+          const cutoff = Date.now() - (opts.hoursBack * 60 * 60 * 1000);
+          if (dt.getTime() < cutoff) continue;
+        }
+
         const dateStr = `${String(dt.getMonth()+1).padStart(2,'0')}/${String(dt.getDate()).padStart(2,'0')} ${String(dt.getHours()).padStart(2,'0')}:${String(dt.getMinutes()).padStart(2,'0')}`;
 
         let pool = "$0.00";
@@ -1167,7 +1174,7 @@ export function createApi(): Hono {
       </table>
     </div>
 
-    ${await buildRafflesTableHtml({ limit: 5 })}
+    ${await buildRafflesTableHtml({ limit: 24, hoursBack: 24 })}
     `));
   });
 
