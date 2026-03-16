@@ -477,7 +477,7 @@ export async function advanceRaffle(vault: Address): Promise<RaffleState> {
     await db.upsertRaffle({
       vault,
       state: stateNames[info.state] || "UNKNOWN",
-      pool: formatEther(info.totalPool),
+      pool: (Number(info.totalPool) / 1e6).toFixed(2),
       participants: Number(info.participantCount),
       closesAt: new Date(Number(info.closesAt) * 1000),
     });
@@ -488,7 +488,7 @@ export async function advanceRaffle(vault: Address): Promise<RaffleState> {
   } catch {}
 
   console.log(
-    `[lifecycle] ${vault.slice(0, 10)}... state=${stateNames[info.state]} pool=${formatEther(info.totalPool)} participants=${info.participantCount}`
+    `[lifecycle] ${vault.slice(0, 10)}... state=${stateNames[info.state]} pool=${(Number(info.totalPool) / 1e6).toFixed(2)} participants=${info.participantCount}`
   );
 
   switch (info.state) {
@@ -563,9 +563,9 @@ export async function advanceRaffle(vault: Address): Promise<RaffleState> {
         })) as string[];
         if (winners.length > 0) {
           const winnerName = await resolveAgentName(winners[0] as Address);
-          await db.recordResult(vault, winners[0], winnerName, formatEther(info.totalPool));
-          console.log(`[lifecycle] Winner: ${winnerName || winners[0].slice(0,10)} won $${formatEther(info.totalPool)}`);
-          setServerPhase("RESULT", { address: winners[0], name: winnerName, prize: formatEther(info.totalPool) });
+          await db.recordResult(vault, winners[0], winnerName, (Number(info.totalPool) / 1e6).toFixed(2));
+          console.log(`[lifecycle] Winner: ${winnerName || winners[0].slice(0,10)} won $${(Number(info.totalPool) / 1e6).toFixed(2)}`);
+          setServerPhase("RESULT", { address: winners[0], name: winnerName, prize: (Number(info.totalPool) / 1e6).toFixed(2) });
 
           // Auto-advance: RESULT → DISTRIB → RESET
           setTimeout(() => setServerPhase("DISTRIB"), 30000);

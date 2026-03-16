@@ -1,6 +1,6 @@
 import { Hono } from "hono";
 import { cors } from "hono/cors";
-import { type Address, formatEther } from "viem";
+import { type Address } from "viem";
 import {
   getActiveRaffles,
   getRaffleInfo,
@@ -168,7 +168,7 @@ async function buildRafflesTableHtml(opts: { limit?: number; page?: number; show
         let statusHtml = "";
         try {
           const tp = (await publicClient.readContract({ address: vault, abi: RaffleVaultAbi, functionName: "totalPool" })) as bigint;
-          pool = formatCash(formatEther(tp));
+          pool = formatCash((Number(tp) / 1e6).toFixed(2));
           const pc = (await publicClient.readContract({ address: vault, abi: RaffleVaultAbi, functionName: "uniqueParticipantCount" })) as bigint;
           participants = pc.toString();
         } catch {}
@@ -432,7 +432,7 @@ export function createApi(): Hono {
           return {
             address: info.address,
             state: RaffleState[info.state],
-            totalPool: formatEther(info.totalPool),
+            totalPool: (Number(info.totalPool) / 1e6).toFixed(2),
             participants: info.participantCount.toString(),
             closesAt: new Date(
               Number(info.closesAt) * 1000
@@ -472,7 +472,7 @@ export function createApi(): Hono {
         current: {
           address: info.address,
           state: RaffleState[info.state],
-          totalPool: formatEther(info.totalPool),
+          totalPool: (Number(info.totalPool) / 1e6).toFixed(2),
           participants: info.participantCount.toString(),
           closesAt: new Date(Number(info.closesAt) * 1000).toISOString(),
           ticketPrice: formatUsd6(config.raffle.ticketPriceUsd6),
@@ -541,7 +541,7 @@ export function createApi(): Hono {
             phase: serverPhase.phase,
             phaseChangedAt: serverPhase.changedAt,
             phaseWinner: serverPhase.winner,
-            pool: formatEther(info.totalPool),
+            pool: (Number(info.totalPool) / 1e6).toFixed(2),
             participants: info.participantCount.toString(),
             closesAt: Number(info.closesAt) * 1000,
             name: onChainName || "House Raffle",
@@ -561,7 +561,7 @@ export function createApi(): Hono {
             const closesAtTs = Number(info.closesAt);
             const dt = new Date(closesAtTs * 1000);
             const dateStr = `${String(dt.getMonth()+1).padStart(2,'0')}/${String(dt.getDate()).padStart(2,'0')} ${String(dt.getHours()).padStart(2,'0')}:${String(dt.getMinutes()).padStart(2,'0')}`;
-            const pool = formatCash(formatEther(info.totalPool));
+            const pool = formatCash((Number(info.totalPool) / 1e6).toFixed(2));
             const settled = {
               vault,
               ended: dateStr,
@@ -598,7 +598,7 @@ export function createApi(): Hono {
       return c.json({
         address: info.address,
         state: RaffleState[info.state],
-        totalPool: formatEther(info.totalPool),
+        totalPool: (Number(info.totalPool) / 1e6).toFixed(2),
         participants: info.participantCount.toString(),
         closesAt: new Date(Number(info.closesAt) * 1000).toISOString(),
       });
