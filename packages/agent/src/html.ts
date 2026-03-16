@@ -317,6 +317,16 @@ export function layout(title: string, body: string): string {
     .prev-table a { color: inherit; }
     .prev-table a:hover { color: #8b1a11; }
 
+    /* ---- Row flash animation ---- */
+
+    @keyframes rowFlash {
+      0% { background: rgba(139, 26, 17, 0.3); }
+      100% { background: transparent; }
+    }
+    .row-flash {
+      animation: rowFlash 2s ease-out;
+    }
+
     /* ---- Responsive ---- */
 
     @media (max-width: 600px) {

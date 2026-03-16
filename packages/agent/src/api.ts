@@ -80,7 +80,13 @@ async function buildPrevRafflesHtml(): Promise<string> {
       } catch { continue; }
     }
 
-    if (rows.length === 0) return "";
+    // Always render the section (even empty) so SSE can append rows live
+    if (rows.length === 0) return `<div class="section">
+      <h2>Previous Raffles</h2>
+      <table class="prev-table">
+        <tr><th>Raffle</th><th>Ended</th><th>Pool</th><th>Participants</th><th>Winner</th></tr>
+      </table>
+    </div>`;
 
     return `<div class="section">
       <h2>Previous Raffles</h2>
@@ -231,6 +237,8 @@ export function createApi(): Hono {
     const { streamSSE } = await import("hono/streaming");
     return streamSSE(c, async (stream) => {
       let lastJson = "";
+      let lastVault = "";
+      let sentSettledFor = ""; // track which vault we already sent a settled event for
       const send = async () => {
         try {
           let vault = (await import("./scheduler.js")).getCurrentVault();
@@ -282,6 +290,24 @@ export function createApi(): Hono {
           if (json !== lastJson) {
             await stream.writeSSE({ data: json, event: "raffle" });
             lastJson = json;
+          }
+
+          // Emit settled event when a raffle completes (for live history table update)
+          if ((info.state === RaffleState.SETTLED || info.state === RaffleState.INVALID) && vault !== sentSettledFor) {
+            sentSettledFor = vault;
+            const closesAtTs = Number(info.closesAt);
+            const dt = new Date(closesAtTs * 1000);
+            const dateStr = `${String(dt.getMonth()+1).padStart(2,'0')}/${String(dt.getDate()).padStart(2,'0')} ${String(dt.getHours()).padStart(2,'0')}:${String(dt.getMinutes()).padStart(2,'0')}`;
+            const pool = formatCash(formatEther(info.totalPool));
+            const settled = {
+              vault,
+              ended: dateStr,
+              pool,
+              participants: info.participantCount.toString(),
+              state: RaffleState[info.state],
+              winners,
+            };
+            await stream.writeSSE({ data: JSON.stringify(settled), event: "settled" });
           }
         } catch {}
       };
@@ -652,6 +678,41 @@ export function createApi(): Hono {
         requestAnimationFrame(tick);
       }
       tick();
+
+      // Listen for settled raffles and prepend to history table
+      es.addEventListener('settled', function(e){
+        var d = JSON.parse(e.data);
+        var table = document.querySelector('.prev-table');
+        if(!table) return;
+
+        var shortVault = d.vault.slice(0,6)+'...'+d.vault.slice(-4);
+        var winnerHtml = '—';
+        var rowOpacity = '';
+        if(d.state === 'SETTLED' && d.winners && d.winners.length > 0){
+          var w = d.winners[0];
+          winnerHtml = '<a href="https://sepolia.celoscan.io/address/'+w+'" target="_blank">'+w.slice(0,6)+'...'+w.slice(-4)+'</a>';
+        } else if(d.state === 'INVALID'){
+          winnerHtml = '<em>Invalid</em>';
+          rowOpacity = ' style="opacity:0.35"';
+        }
+
+        var tr = document.createElement('tr');
+        tr.className = 'row-flash';
+        if(d.state === 'INVALID') tr.style.opacity = '0.35';
+        tr.innerHTML = '<td><a href="https://sepolia.celoscan.io/address/'+d.vault+'" target="_blank">'+shortVault+'</a></td>'
+          + '<td>'+d.ended+'</td>'
+          + '<td>'+d.pool+'</td>'
+          + '<td>'+d.participants+'</td>'
+          + '<td>'+winnerHtml+'</td>';
+
+        // Insert after the header row
+        var headerRow = table.querySelector('tr');
+        if(headerRow && headerRow.nextSibling){
+          table.insertBefore(tr, headerRow.nextSibling);
+        } else {
+          table.appendChild(tr);
+        }
+      });
     })();
     </script>
 
