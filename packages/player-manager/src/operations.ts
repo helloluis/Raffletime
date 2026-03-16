@@ -116,9 +116,20 @@ export async function fundPlayers(
   });
 
   for (const player of players) {
+    // Check treasury balances before each player to avoid over-spending
+    const treasuryCelo = await publicClient.getBalance({ address: treasuryAccount.address });
+    const treasuryTokens = (await publicClient.readContract({
+      address: config.paymentToken, abi: ERC20_ABI, functionName: "balanceOf",
+      args: [treasuryAccount.address],
+    })) as bigint;
+
     // Check CELO balance
     const celoBalance = await publicClient.getBalance({ address: player.address as Address });
     if (celoBalance < celoAmt) {
+      if (treasuryCelo < celoAmt + parseEther("0.01")) { // keep some for gas
+        console.log(`  ${player.name}: skipped (treasury low on CELO)`);
+        continue;
+      }
       const hash = await treasuryWallet.sendTransaction({
         to: player.address as Address,
         value: celoAmt,
@@ -135,6 +146,10 @@ export async function fundPlayers(
     })) as bigint;
 
     if (tokenBalance < tokenAmt) {
+      if (treasuryTokens < tokenAmt) {
+        console.log(`  ${player.name}: skipped (treasury low on tokens: $${(Number(treasuryTokens) / (10 ** tokenDecimals)).toFixed(2)})`);
+        continue;
+      }
       const needed = tokenAmt - tokenBalance;
       // If mock token, mint. Otherwise transfer from treasury.
       if (config.isMockToken) {
@@ -143,14 +158,14 @@ export async function fundPlayers(
           args: [player.address as Address, needed],
         } as any);
         await publicClient.waitForTransactionReceipt({ hash });
-        console.log(`  ${player.name}: minted $${formatEther(needed)}`);
+        console.log(`  ${player.name}: minted $${(Number(needed) / (10 ** tokenDecimals)).toFixed(2)}`);
       } else {
         const hash = await treasuryWallet.writeContract({
           address: config.paymentToken, abi: ERC20_ABI, functionName: "transfer",
           args: [player.address as Address, needed],
         } as any);
         await publicClient.waitForTransactionReceipt({ hash });
-        console.log(`  ${player.name}: transferred $${formatEther(needed)}`);
+        console.log(`  ${player.name}: transferred $${(Number(needed) / (10 ** tokenDecimals)).toFixed(2)}`);
       }
     }
   }
