@@ -317,6 +317,100 @@ export function layout(title: string, body: string): string {
     .prev-table a { color: inherit; }
     .prev-table a:hover { color: #8b1a11; }
 
+    /* ---- Modal ---- */
+
+    .modal-overlay {
+      display: none;
+      position: fixed;
+      inset: 0;
+      background: rgba(0,0,0,0.7);
+      z-index: 1000;
+      justify-content: center;
+      align-items: center;
+    }
+    .modal-overlay.active { display: flex; }
+
+    .modal {
+      background: #fff;
+      color: #000;
+      max-width: 480px;
+      width: 90%;
+      padding: 2rem;
+      position: relative;
+      max-height: 90vh;
+      overflow-y: auto;
+    }
+    .modal h2 {
+      background: none;
+      color: #000;
+      display: block;
+      padding: 0;
+      margin: 0 0 1rem;
+      font-size: 1rem;
+    }
+    .modal p { margin: 0.5rem 0; line-height: 1.6; }
+    .modal .step {
+      padding: 0.75rem 0;
+      border-bottom: 1px solid #eee;
+    }
+    .modal .step:last-child { border-bottom: none; }
+    .modal .step-num {
+      font-family: 'Space Mono', monospace;
+      font-weight: 700;
+      font-size: 0.75rem;
+      background: #111;
+      color: #fff;
+      padding: 2px 8px;
+      margin-right: 0.5rem;
+    }
+    .modal .step-status {
+      font-family: 'Space Mono', monospace;
+      font-size: 0.75rem;
+      float: right;
+    }
+    .modal .step-status.done { color: #16a34a; }
+    .modal .step-status.pending { color: #999; }
+    .modal .step-status.active { color: #8b1a11; }
+    .modal .step-status.error { color: #8b1a11; }
+
+    .modal-btn {
+      display: block;
+      width: 100%;
+      background: #8b1a11;
+      color: #fff;
+      font-family: 'Space Mono', monospace;
+      font-weight: 700;
+      font-size: 1rem;
+      padding: 0.75rem;
+      border: none;
+      cursor: pointer;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      margin-top: 1rem;
+    }
+    .modal-btn:hover { background: #5c110b; }
+    .modal-btn:disabled { background: #999; cursor: not-allowed; }
+
+    .modal-close {
+      position: absolute;
+      top: 1rem;
+      right: 1rem;
+      background: none;
+      border: none;
+      font-size: 1.5rem;
+      cursor: pointer;
+      color: #999;
+      font-family: 'Space Mono', monospace;
+    }
+    .modal-close:hover { color: #000; }
+
+    .modal .wallet-addr {
+      font-family: 'Space Mono', monospace;
+      font-size: 0.8rem;
+      color: #555;
+      margin-top: 0.25rem;
+    }
+
     /* ---- Row flash animation ---- */
 
     @keyframes rowFlash {

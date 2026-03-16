@@ -502,7 +502,7 @@ export function createApi(): Hono {
         <span id="participants">${initialParticipants}</span> participants
       </div>
       <div id="join-area">
-        ${initialVault ? `<a href="/raffles/${initialVault}" class="cta" id="join-btn">Join ${ticketPrice}</a>` : ""}
+        ${initialVault ? `<button class="cta" id="join-btn" onclick="openJoinModal()">Join ${ticketPrice}</button>` : ""}
       </div>
       <div id="result-line" style="display:none"></div>
     </div>
@@ -534,7 +534,7 @@ export function createApi(): Hono {
           vault = d.vault;
           // New raffle — reset to countdown mode
           phase = null;
-          joinArea.innerHTML = '<a href="/raffles/'+vault+'" class="cta" id="join-btn">Join ${ticketPrice}</a>';
+          joinArea.innerHTML = '<button class="cta" id="join-btn" onclick="openJoinModal()">Join ${ticketPrice}</button>';
           joinArea.style.display = '';
           resultLine.style.display = 'none';
           document.body.style.transition = 'background-color 2s ease';
@@ -713,6 +713,196 @@ export function createApi(): Hono {
           table.appendChild(tr);
         }
       });
+    })();
+    </script>
+
+    <!-- Join Modal -->
+    <div class="modal-overlay" id="joinModal">
+      <div class="modal">
+        <button class="modal-close" onclick="closeJoinModal()">&times;</button>
+        <h2>Join This Raffle</h2>
+
+        <div class="step" id="step-connect">
+          <span class="step-num">1</span> Connect Wallet
+          <span class="step-status pending" id="status-connect">waiting</span>
+          <p id="wallet-info"></p>
+        </div>
+
+        <div class="step" id="step-register">
+          <span class="step-num">2</span> Registration ($1 security deposit)
+          <span class="step-status pending" id="status-register">waiting</span>
+          <p style="font-size:0.85rem;color:#555">One-time only. Approves and stakes $1 as a security deposit. Withdrawable after 14 days.</p>
+        </div>
+
+        <div class="step" id="step-badge">
+          <span class="step-num">3</span> Mint Soulbound Badge
+          <span class="step-status pending" id="status-badge">waiting</span>
+          <p style="font-size:0.85rem;color:#555">Your on-chain identity. Non-transferable NFT that proves you're a registered player.</p>
+        </div>
+
+        <div class="step" id="step-ticket">
+          <span class="step-num">4</span> Buy Ticket (${ticketPrice})
+          <span class="step-status pending" id="status-ticket">waiting</span>
+          <p style="font-size:0.85rem;color:#555">Approves and purchases your raffle ticket. Good luck!</p>
+        </div>
+
+        <button class="modal-btn" id="modal-action" onclick="runJoinFlow()">Connect Wallet</button>
+        <p id="modal-error" style="color:#8b1a11;font-size:0.85rem;margin-top:0.5rem;display:none"></p>
+      </div>
+    </div>
+
+    <script>
+    // Join modal wallet interaction
+    (function(){
+      var TOKEN = '${config.contracts.paymentToken}';
+      var AGENT_REG = '${config.contracts.agentRegistry}';
+      var BOND = '0x' + BigInt('${config.bondAmount}').toString(16);
+      var TICKET = '0x' + BigInt('${config.raffle.ticketPrice}').toString(16);
+      var CHAIN_ID = '0x' + (${config.chainId}).toString(16);
+
+      var currentStep = 'connect'; // connect, register, badge, ticket, done
+      var userAddr = null;
+      var isRegistered = false;
+
+      window.openJoinModal = function(){
+        document.getElementById('joinModal').classList.add('active');
+        if(userAddr) checkRegistration();
+      };
+      window.closeJoinModal = function(){
+        document.getElementById('joinModal').classList.remove('active');
+      };
+
+      function setStatus(step, status, text){
+        var el = document.getElementById('status-'+step);
+        if(el){
+          el.className = 'step-status ' + status;
+          el.textContent = text || status;
+        }
+      }
+      function showError(msg){
+        var el = document.getElementById('modal-error');
+        el.textContent = msg;
+        el.style.display = msg ? '' : 'none';
+      }
+      function setButtonText(text){ document.getElementById('modal-action').textContent = text; }
+      function setButtonDisabled(d){ document.getElementById('modal-action').disabled = d; }
+
+      // ERC-20 approve ABI encoding
+      function encodeApprove(spender, amount){
+        // approve(address,uint256)
+        var sig = '0x095ea7b3';
+        var addr = spender.slice(2).padStart(64,'0');
+        var amt = BigInt(amount).toString(16).padStart(64,'0');
+        return sig + addr + amt;
+      }
+      // registerAgent(string,uint256) — simplified encoding
+      function encodeRegister(uri, bondAmt){
+        // sig: first 4 bytes of keccak256("registerAgent(string,uint256)")
+        var sig = '0x68fb4091';
+        // ABI encode: offset to string (0x40), bond amount, string length, string data
+        var bondHex = BigInt(bondAmt).toString(16).padStart(64,'0');
+        var strBytes = [];
+        for(var i=0;i<uri.length;i++) strBytes.push(uri.charCodeAt(i).toString(16).padStart(2,'0'));
+        var strHex = strBytes.join('');
+        var strLen = uri.length.toString(16).padStart(64,'0');
+        var strPadded = strHex.padEnd(Math.ceil(strHex.length/64)*64,'0');
+        return sig + '0000000000000000000000000000000000000000000000000000000000000040' + bondHex + strLen + strPadded;
+      }
+      // enterRaffle(address)
+      function encodeEnterRaffle(beneficiary){
+        var sig = '0x4d827e08';
+        var addr = beneficiary.slice(2).padStart(64,'0');
+        return sig + addr;
+      }
+      // isRegistered(address)
+      function encodeIsRegistered(addr){
+        var sig = '0xc3c5a547';
+        return sig + addr.slice(2).padStart(64,'0');
+      }
+
+      async function switchChain(){
+        try{
+          await window.ethereum.request({method:'wallet_switchEthereumChain',params:[{chainId:CHAIN_ID}]});
+        } catch(e){
+          if(e.code===4902){
+            await window.ethereum.request({method:'wallet_addEthereumChain',params:[{
+              chainId: CHAIN_ID,
+              chainName: '${config.chainId === 42220 ? "Celo" : "Celo Sepolia"}',
+              rpcUrls: ['${config.rpcUrl}'],
+              nativeCurrency: {name:'CELO',symbol:'CELO',decimals:18}
+            }]});
+          }
+        }
+      }
+
+      async function checkRegistration(){
+        var data = encodeIsRegistered(userAddr);
+        var result = await window.ethereum.request({method:'eth_call',params:[{to:AGENT_REG,data:data},'latest']});
+        isRegistered = result && result !== '0x0000000000000000000000000000000000000000000000000000000000000000';
+        setStatus('connect','done','done');
+        document.getElementById('wallet-info').innerHTML = '<span class="wallet-addr">'+userAddr.slice(0,6)+'...'+userAddr.slice(-4)+'</span>';
+        if(isRegistered){
+          setStatus('register','done','done');
+          setStatus('badge','done','done');
+          currentStep = 'ticket';
+          setButtonText('Buy Ticket');
+        } else {
+          currentStep = 'register';
+          setButtonText('Stake $1 Deposit');
+        }
+      }
+
+      window.runJoinFlow = async function(){
+        showError('');
+        setButtonDisabled(true);
+        try {
+          if(currentStep === 'connect'){
+            if(!window.ethereum){ showError('No wallet detected. Install MetaMask or Rabby.'); setButtonDisabled(false); return; }
+            setStatus('connect','active','connecting...');
+            var accounts = await window.ethereum.request({method:'eth_requestAccounts'});
+            userAddr = accounts[0];
+            await switchChain();
+            await checkRegistration();
+            setButtonDisabled(false);
+
+          } else if(currentStep === 'register'){
+            // Step 2: Approve bond
+            setStatus('register','active','approving deposit...');
+            await window.ethereum.request({method:'eth_sendTransaction',params:[{from:userAddr,to:TOKEN,data:encodeApprove(AGENT_REG,BOND)}]});
+            setStatus('register','done','done');
+
+            // Step 3: Register (mints soulbound badge)
+            currentStep = 'badge';
+            setStatus('badge','active','minting badge...');
+            var uri = 'https://raffletime.io/agents/player-'+userAddr.slice(2,8).toLowerCase()+'.json';
+            await window.ethereum.request({method:'eth_sendTransaction',params:[{from:userAddr,to:AGENT_REG,data:encodeRegister(uri,BOND)}]});
+            setStatus('badge','done','done');
+
+            isRegistered = true;
+            currentStep = 'ticket';
+            setButtonText('Buy Ticket');
+            setButtonDisabled(false);
+
+          } else if(currentStep === 'ticket'){
+            // Step 4a: Approve ticket
+            setStatus('ticket','active','approving...');
+            await window.ethereum.request({method:'eth_sendTransaction',params:[{from:userAddr,to:TOKEN,data:encodeApprove(vault,TICKET)}]});
+            // Step 4b: Enter raffle
+            setStatus('ticket','active','entering raffle...');
+            await window.ethereum.request({method:'eth_sendTransaction',params:[{from:userAddr,to:vault,data:encodeEnterRaffle('0x0000000000000000000000000000000000000000')}]});
+            setStatus('ticket','done','done');
+            currentStep = 'done';
+            setButtonText('You\\'re In!');
+            setButtonDisabled(true);
+          }
+        } catch(e){
+          showError(e.message || 'Transaction failed');
+          setButtonDisabled(false);
+          if(currentStep !== 'done'){
+            setStatus(currentStep,'error','failed — try again');
+          }
+        }
+      };
     })();
     </script>
 
