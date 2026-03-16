@@ -132,13 +132,12 @@ async function tick(seedPassword: string): Promise<void> {
 
   const closesAt = new Date(raffle.closesAt).getTime();
   const now = Date.now();
-  const elapsed = now - (closesAt - 3600000); // approx time since raffle started (assuming 1h)
   const remaining = closesAt - now;
   const remainingMin = Math.floor(remaining / 60000);
   const participants = parseInt(raffle.participants) || 0;
 
-  // ── EARLY WAVE: first 15 minutes, seed the pot with 2-4 house players ──
-  if (earlyWaveDone !== vault && elapsed > 60000 && remaining > 45 * 60000) {
+  // ── EARLY WAVE: when > 15 min remaining, seed the pot ──
+  if (earlyWaveDone !== vault && remaining > 15 * 60000) {
     earlyWaveDone = vault;
 
     const activePlayers = getActivePlayers();
