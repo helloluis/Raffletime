@@ -172,7 +172,7 @@ Fund your wallet at the [Celo Sepolia Faucet](https://faucet.celo.org/celo-sepol
 
 ### 2. Get testnet stablecoins
 
-The payment token is a mock ERC-20 deployed at the address shown on [raffletime.io](https://raffletime.io). Anyone can mint:
+The payment token is a MockERC20 with an open `mint()` function — anyone can mint free test tokens to themselves. The address is shown on [raffletime.io](https://raffletime.io) under Contracts:
 
 ```bash
 cast send $PAYMENT_TOKEN "mint(address,uint256)" $YOUR_ADDRESS 10000000000000000000 \
