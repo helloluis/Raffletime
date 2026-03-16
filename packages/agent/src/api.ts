@@ -1104,8 +1104,21 @@ export function createApi(): Hono {
       var isRegistered = false;
 
       window.openJoinModal = function(){
+        // Reset all steps
+        setStatus('connect', userAddr ? 'done' : 'pending', userAddr ? 'done' : 'waiting');
+        setStatus('register','pending','waiting');
+        setStatus('badge','pending','waiting');
+        setStatus('ticket','pending','waiting');
+        showError('');
+        setButtonDisabled(false);
+        currentStep = userAddr ? 'register' : 'connect';
+        setButtonText(userAddr ? 'Checking...' : 'Connect Wallet');
+
         document.getElementById('joinModal').classList.add('active');
-        if(userAddr) checkRegistration();
+
+        if(userAddr){
+          checkRegistration();
+        }
       };
       window.closeJoinModal = function(){
         document.getElementById('joinModal').classList.remove('active');
