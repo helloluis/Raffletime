@@ -146,10 +146,21 @@ async function buildParticipantsHtml(vault: Address, info: { participantCount: b
       } catch {}
     }
 
-    // Look up ERC-8004 agent names from on-chain registry
+    // Look up ERC-8004 agent names — use cache first, then on-chain
+    const { getCachedAgent, cacheAgent } = await import("./agent-cache.js");
     const agentNames = new Map<string, string>();
-    const housePlayerUris = new Set<string>(); // URIs containing "raffletime.io" are house players
+    const housePlayerAddrs = new Set<string>();
+
     for (const addr of seen.keys()) {
+      // Check cache first
+      const cached = getCachedAgent(addr);
+      if (cached) {
+        if (cached.name) agentNames.set(addr, cached.name);
+        if (cached.isHousePlayer) housePlayerAddrs.add(addr);
+        continue;
+      }
+
+      // Cache miss — look up on-chain
       try {
         const agentId = (await publicClient.readContract({
           address: config.contracts.agentRegistry,
@@ -167,16 +178,21 @@ async function buildParticipantsHtml(vault: Address, info: { participantCount: b
           })) as string;
 
           // Extract name from URI path: .../agents/arabica.json -> Arabica
+          let name: string | null = null;
           const nameMatch = uri.match(/\/agents\/([^/.]+)\.json/);
           if (nameMatch) {
-            const name = nameMatch[1].charAt(0).toUpperCase() + nameMatch[1].slice(1).replace(/-/g, ' ');
+            name = nameMatch[1].charAt(0).toUpperCase() + nameMatch[1].slice(1).replace(/-/g, ' ');
             agentNames.set(addr, name);
           }
 
-          // House players have raffletime.io in their URI
-          if (uri.includes("raffletime.io")) {
-            housePlayerUris.add(addr);
-          }
+          const isHouse = uri.includes("raffletime.io");
+          if (isHouse) housePlayerAddrs.add(addr);
+
+          // Cache for future lookups
+          cacheAgent(addr, { name, uri, isHousePlayer: isHouse });
+        } else {
+          // Not registered — cache as unknown
+          cacheAgent(addr, { name: null, uri: null, isHousePlayer: false });
         }
       } catch {}
     }
@@ -185,7 +201,7 @@ async function buildParticipantsHtml(vault: Address, info: { participantCount: b
       const short = `${addr.slice(0, 6)}...${addr.slice(-4)}`;
       const link = `<a href="https://sepolia.celoscan.io/address/${addr}" target="_blank" style="color:inherit">${short}</a>`;
       const name = agentNames.get(addr);
-      const isHouse = housePlayerUris.has(addr);
+      const isHouse = housePlayerAddrs.has(addr);
       const isWinner = winnerSet.has(addr);
       const nameHtml = name ? `<strong>${name}</strong> ${link}` : link;
       const badges = [
