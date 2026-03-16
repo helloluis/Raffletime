@@ -217,8 +217,15 @@ export async function createHouseRaffle(
   });
   await publicClient.waitForTransactionReceipt({ hash: approveTx });
 
-  // Create raffle
-  console.log("[lifecycle] Creating house raffle...");
+  // Create raffle — duration aligns to the top of the next hour
+  const now = new Date();
+  const nextHour = new Date(now);
+  nextHour.setHours(now.getHours() + 1, 0, 0, 0);
+  const secsUntilNextHour = Math.floor((nextHour.getTime() - now.getTime()) / 1000);
+  // Use clock-aligned duration, but fall back to config if somehow <= 60s
+  const duration = secsUntilNextHour > 60 ? BigInt(secsUntilNextHour) : config.raffle.duration;
+
+  console.log(`[lifecycle] Creating house raffle... closes in ${secsUntilNextHour}s (at top of hour)`);
   const params = {
     name: name || config.raffle.name,
     description: config.raffle.description,
@@ -228,7 +235,7 @@ export async function createHouseRaffle(
     winnerShareBps: config.raffle.winnerShareBps,
     beneficiaryShareBps: config.raffle.beneficiaryShareBps,
     beneficiaryOptions: beneficiaries,
-    duration: config.raffle.duration,
+    duration,
     targetPoolSize: config.raffle.targetPoolSize,
     minUniqueParticipants: config.raffle.minUniqueParticipants,
     agentsOnly: config.raffle.agentsOnly,
@@ -393,7 +400,21 @@ export async function advanceRaffle(vault: Address): Promise<RaffleState> {
       break;
 
     case RaffleState.INVALID:
-      // Nothing to do — scheduler will detect this and create next raffle
+      // Auto-distribute refunds to all participants
+      if (info.participantCount > 0n) {
+        try {
+          console.log("[lifecycle] Distributing refunds for invalid raffle...");
+          const refundHash = await writeContract({
+            address: vault,
+            abi: RaffleVaultAbi,
+            functionName: "distributeRefunds",
+          });
+          await publicClient.waitForTransactionReceipt({ hash: refundHash });
+          console.log("[lifecycle] Refunds distributed:", refundHash);
+        } catch (e) {
+          console.log("[lifecycle] Refunds already distributed or no entries");
+        }
+      }
       break;
   }
 

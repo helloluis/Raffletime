@@ -20,7 +20,7 @@ export function layout(title: string, body: string): string {
 
     body {
       font-family: 'Noto Sans', sans-serif;
-      background: #777272;
+      background: #908888;
       color: #000;
       min-height: 100vh;
       font-size: 16px;
@@ -144,6 +144,25 @@ export function layout(title: string, body: string): string {
       letter-spacing: 0.08em;
       padding: 2px 8px;
     }
+    .testnet-pill {
+      font-family: 'Space Mono', monospace;
+      font-size: 0.55rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+      background: #999;
+      color: #fff;
+      padding: 3px 8px;
+      vertical-align: middle;
+      margin-left: 0.5rem;
+    }
+
+    #result-line {
+      font-family: 'Space Mono', monospace;
+      font-size: 1.25rem;
+      margin-top: 0.5rem;
+    }
+
     .type-badge.house { background: #999; color: #fff; }
     .type-badge.community { background: #8b1a11; color: #fff; }
 

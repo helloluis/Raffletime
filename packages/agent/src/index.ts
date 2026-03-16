@@ -37,16 +37,7 @@ async function main() {
         .filter(Boolean)
         .map((addr) => addr.trim() as Address);
 
-      if (beneficiaries.length > 0) {
-        await startScheduler(beneficiaries);
-      } else {
-        console.log(
-          "[main] No BENEFICIARIES configured, scheduler disabled"
-        );
-        console.log(
-          "[main] Set BENEFICIARIES=0xaddr1,0xaddr2 to enable"
-        );
-      }
+      await startScheduler(beneficiaries);
     } catch (error) {
       console.error("[main] Failed to initialize:", error);
       console.log("[main] Starting API server anyway...");

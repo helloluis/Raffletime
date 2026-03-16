@@ -163,6 +163,13 @@ export const RaffleVaultAbi = [
     inputs: [],
     outputs: [],
   },
+  {
+    name: "distributeRefunds",
+    type: "function",
+    stateMutability: "nonpayable",
+    inputs: [],
+    outputs: [],
+  },
   // Events
   {
     name: "StateTransition",

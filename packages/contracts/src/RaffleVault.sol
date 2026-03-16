@@ -367,18 +367,36 @@ contract RaffleVault is ReentrancyGuard {
         emit RaffleInvalidated(reason);
     }
 
-    /// @notice Claim refund for an invalid raffle
+    /// @notice Claim refund for an invalid raffle (pull-based, for individual participants)
     function claimRefund() external onlyState(State.INVALID) nonReentrant {
         uint256 entries = entryCount[msg.sender];
         require(entries > 0, "No entries");
 
-        // Clear state before external calls (checks-effects-interactions)
         entryCount[msg.sender] = 0;
         uint256 refundAmount = entries * params.ticketPrice;
 
         paymentToken.safeTransfer(msg.sender, refundAmount);
 
         emit RefundIssued(msg.sender, refundAmount);
+    }
+
+    /// @notice Push refunds to all participants at once (callable by anyone).
+    ///         Gas cost scales with participant count. For house raffles with
+    ///         small participant counts this is practical and provides better UX.
+    function distributeRefunds() external onlyState(State.INVALID) nonReentrant {
+        uint256 len = participants.length;
+        require(len > 0, "No participants");
+
+        for (uint256 i = 0; i < len; i++) {
+            address participant = participants[i];
+            uint256 entries = entryCount[participant];
+            if (entries == 0) continue;
+
+            entryCount[participant] = 0;
+            uint256 refundAmount = entries * params.ticketPrice;
+            paymentToken.safeTransfer(participant, refundAmount);
+            emit RefundIssued(participant, refundAmount);
+        }
     }
 
     // ============ Internal helpers ============

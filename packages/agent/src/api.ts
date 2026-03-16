@@ -158,6 +158,75 @@ export function createApi(): Hono {
     }
   });
 
+  // ============ SSE: Live raffle updates ============
+
+  app.get("/api/raffles/live", async (c) => {
+    const { streamSSE } = await import("hono/streaming");
+    return streamSSE(c, async (stream) => {
+      let lastJson = "";
+      const send = async () => {
+        try {
+          const vault = (await import("./scheduler.js")).getCurrentVault();
+          if (!vault) {
+            const json = JSON.stringify({ state: "WAITING", vault: null });
+            if (json !== lastJson) {
+              await stream.writeSSE({ data: json, event: "raffle" });
+              lastJson = json;
+            }
+            return;
+          }
+
+          const info = await getRaffleInfo(vault);
+          const meta = getRaffleMeta(vault);
+          const onChainName = meta?.name || await getRaffleName(vault);
+
+          // Try to get winners if in PAYOUT or SETTLED state
+          let winners: string[] = [];
+          if (info.state === RaffleState.PAYOUT || info.state === RaffleState.SETTLED) {
+            try {
+              const w = await publicClient.readContract({
+                address: vault,
+                abi: RaffleVaultAbi,
+                functionName: "getWinners",
+              });
+              winners = (w as string[]).map(String);
+            } catch {}
+          }
+
+          const data = {
+            vault,
+            state: RaffleState[info.state],
+            pool: formatEther(info.totalPool),
+            participants: info.participantCount.toString(),
+            closesAt: Number(info.closesAt) * 1000,
+            name: onChainName || "House Raffle",
+            type: meta?.type || "house",
+            ticketPrice: formatEther(config.raffle.ticketPrice),
+            winners,
+          };
+          const json = JSON.stringify(data);
+          if (json !== lastJson) {
+            await stream.writeSSE({ data: json, event: "raffle" });
+            lastJson = json;
+          }
+        } catch {}
+      };
+
+      // Send initial state immediately
+      await send();
+
+      // Poll every 3 seconds
+      const interval = setInterval(send, 3000);
+      stream.onAbort(() => clearInterval(interval));
+
+      // Keep alive — SSE requires the connection to stay open
+      while (true) {
+        await stream.sleep(3000);
+        await send();
+      }
+    });
+  });
+
   // ============ Raffle metadata ============
 
   app.get("/api/raffles/:address/meta", async (c) => {
@@ -276,66 +345,198 @@ export function createApi(): Hono {
       });
     }
 
-    // Get current house raffle for the hero countdown
-    let heroHtml = "";
+    // Initial server-rendered state
+    let initialPool = "0.00";
+    let initialParticipants = "0";
+    let initialClosesAt = Date.now() + 3600000;
+    let initialState = "OPEN";
+    let initialVault = "";
     try {
       const currentVault = (await import("./scheduler.js")).getCurrentVault();
-      const activeRaffles = await getActiveRaffles();
-
       if (currentVault) {
         const info = await getRaffleInfo(currentVault);
-        const meta = getRaffleMeta(currentVault);
-        const onChainName = meta?.name || await getRaffleName(currentVault);
-        const displayName = onChainName || "House Raffle";
-        const pool = parseFloat(formatEther(info.totalPool));
-        const closesAtMs = Number(info.closesAt) * 1000;
-        const ticketPrice = formatCash(formatEther(config.raffle.ticketPrice));
-
-        heroHtml = `
-    <div class="countdown" id="timer">00:00<span class="ms">000</span></div>
-    <div class="stats">
-      ${formatCash(formatEther(info.totalPool))}<br>
-      ${info.participantCount.toString()} tickets
-    </div>
-    <a href="/raffles/${currentVault}" class="cta">Join ${ticketPrice}</a>
-    <script>
-      (function(){
-        var end = ${closesAtMs};
-        var el = document.getElementById('timer');
-        function tick(){
-          var d = end - Date.now();
-          if(d < 0) d = 0;
-          var m = Math.floor(d/60000);
-          var s = Math.floor((d%60000)/1000);
-          var ms = Math.floor(d%1000);
-          el.innerHTML = (m<10?'0':'')+m+':'+(s<10?'0':'')+s+'<span class="ms">'+(ms<100?'0':'')+(ms<10?'0':'')+ms+'</span>';
-          if(d > 0) requestAnimationFrame(tick);
-        }
-        tick();
-      })();
-    </script>`;
-      } else {
-        heroHtml = `<div class="empty">No active house raffle. Next one starts soon.</div>`;
+        initialPool = formatEther(info.totalPool);
+        initialParticipants = info.participantCount.toString();
+        initialClosesAt = Number(info.closesAt) * 1000;
+        initialState = RaffleState[info.state];
+        initialVault = currentVault;
       }
+    } catch {}
 
-      // Other raffles section removed — focusing on house raffle hero
-    } catch {
-      heroHtml = `<div class="empty">Failed to load raffles.</div>`;
-    }
+    const ticketPrice = formatCash(formatEther(config.raffle.ticketPrice));
 
     return c.html(layout("Home", `
-    <h1 class="site-title"><span>Raffle</span>time</h1>
+    <h1 class="site-title"><span>Raffle</span>time <span class="testnet-pill">Testnet</span></h1>
     <p class="site-tagline">Zero-loss sybil-resistant agentic raffles.<br>Provably fair. Fully onchain.</p>
 
-    ${heroHtml}
+    <div id="hero">
+      <div class="countdown" id="timer">00:00<span class="ms">000</span></div>
+      <div class="stats" id="stats">
+        <span id="pool">${formatCash(initialPool)}</span><br>
+        <span id="participants">${initialParticipants}</span> participants
+      </div>
+      <div id="join-area">
+        ${initialVault ? `<a href="/raffles/${initialVault}" class="cta" id="join-btn">Join ${ticketPrice}</a>` : ""}
+      </div>
+      <div id="result-line" style="display:none"></div>
+    </div>
+
+    <script>
+    (function(){
+      var timerEl = document.getElementById('timer');
+      var poolEl = document.getElementById('pool');
+      var partEl = document.getElementById('participants');
+      var joinArea = document.getElementById('join-area');
+      var resultLine = document.getElementById('result-line');
+      var closesAt = ${initialClosesAt};
+      var state = '${initialState}';
+      var vault = '${initialVault}';
+      var phase = null; // null = countdown, 'DRAWING_', 'RESULT_', 'DISTRIB_', 'RESET_'
+      var phaseStart = 0;
+      var winners = [];
+
+      // SSE: live updates from server
+      var es = new EventSource('/api/raffles/live');
+      es.addEventListener('raffle', function(e){
+        var d = JSON.parse(e.data);
+        state = d.state;
+        if(d.closesAt) closesAt = d.closesAt;
+        if(d.pool) poolEl.textContent = '$' + parseFloat(d.pool).toFixed(2);
+        if(d.participants) partEl.textContent = d.participants;
+        if(d.winners && d.winners.length) winners = d.winners;
+        if(d.vault && d.vault !== vault){
+          vault = d.vault;
+          // New raffle — reset to countdown mode
+          phase = null;
+          joinArea.innerHTML = '<a href="/raffles/'+vault+'" class="cta" id="join-btn">Join ${ticketPrice}</a>';
+          joinArea.style.display = '';
+          resultLine.style.display = 'none';
+        }
+      });
+
+      // Typewriter animation for phase labels
+      function typewrite(text, el){
+        var i = 0;
+        el.textContent = '';
+        var iv = setInterval(function(){
+          if(i <= text.length){
+            el.textContent = text.slice(0, i) + (i < text.length ? '_' : '');
+            i++;
+          } else {
+            // Pause, then restart
+            setTimeout(function(){ i = 0; }, 800);
+          }
+        }, 100);
+        return iv;
+      }
+
+      var typeIv = null;
+
+      function setPhase(p){
+        if(phase === p) return;
+        phase = p;
+        phaseStart = Date.now();
+        if(typeIv) clearInterval(typeIv);
+
+        joinArea.style.display = 'none';
+
+        if(p === 'DRAWING_'){
+          resultLine.style.display = 'none';
+          typeIv = typewrite('DRAWING', timerEl);
+        } else if(p === 'RESULT_'){
+          typeIv = typewrite('RESULT', timerEl);
+          if(winners.length > 0){
+            var w = winners[0];
+            var short = w.slice(0,6)+'...'+w.slice(-4);
+            var prize = poolEl.textContent || '$0.00';
+            resultLine.innerHTML = '<strong>WIN: '+short+' '+prize+'</strong>';
+            resultLine.style.display = '';
+          }
+        } else if(p === 'DISTRIB_'){
+          typeIv = typewrite('DISTRIB', timerEl);
+        } else if(p === 'INVALID_'){
+          resultLine.style.display = 'none';
+          typeIv = typewrite('INVALID', timerEl);
+        } else if(p === 'REFUND_'){
+          resultLine.innerHTML = 'Not enough participants. Refunds available.';
+          resultLine.style.display = '';
+          typeIv = typewrite('REFUND', timerEl);
+        } else if(p === 'RESET_'){
+          resultLine.style.display = 'none';
+          typeIv = typewrite('RESET', timerEl);
+        }
+      }
+
+      // Main render loop
+      // Post-raffle timelines (all times from closesAt):
+      //
+      // SUCCESS path:
+      //   00:00-00:30  DRAWING_
+      //   00:30-01:00  RESULT_   (shows WIN: 0x... $X)
+      //   01:00-01:45  DISTRIB_  (keeps WIN line)
+      //   01:45-02:00  RESET_
+      //
+      // INVALID path (not enough participants):
+      //   00:01-00:10  INVALID_
+      //   00:11-01:30  REFUND_
+      //   01:31-02:00  RESET_
+
+      function tick(){
+        var now = Date.now();
+
+        if(!phase){
+          if(state === 'OPEN'){
+            // Normal countdown
+            var d = closesAt - now;
+            if(d < 0) d = 0;
+            var m = Math.floor(d/60000);
+            var s = Math.floor((d%60000)/1000);
+            var ms = Math.floor(d%1000);
+            timerEl.innerHTML = (m<10?'0':'')+m+':'+(s<10?'0':'')+s+'<span class="ms">'+(ms<100?'0':'')+(ms<10?'0':'')+ms+'</span>';
+            timerEl.style.color = (d < 60000 && d > 0) ? '#8b1a11' : '';
+            if(d <= 0) setPhase('DRAWING_');
+          } else if(state === 'CLOSED' || state === 'DRAWING'){
+            setPhase('DRAWING_');
+          } else if(state === 'INVALID'){
+            setPhase('INVALID_');
+          } else if(state === 'PAYOUT'){
+            setPhase('RESULT_');
+          } else if(state === 'SETTLED'){
+            setPhase('RESULT_');
+          }
+        }
+
+        // Phase auto-advance based on elapsed time
+        if(phase){
+          var elapsed = now - phaseStart;
+
+          // SUCCESS path
+          if(phase === 'DRAWING_' && elapsed > 30000){
+            if(state === 'INVALID') setPhase('INVALID_');
+            else if(state === 'PAYOUT' || state === 'SETTLED') setPhase('RESULT_');
+          }
+          if(phase === 'RESULT_' && elapsed > 30000) setPhase('DISTRIB_');
+          if(phase === 'DISTRIB_' && elapsed > 45000) setPhase('RESET_');
+
+          // INVALID path
+          if(phase === 'INVALID_' && elapsed > 10000) setPhase('REFUND_');
+          if(phase === 'REFUND_' && elapsed > 80000) setPhase('RESET_');
+        }
+
+        requestAnimationFrame(tick);
+      }
+      tick();
+    })();
+    </script>
 
     <div class="section">
       <h2>For Agents</h2>
       <ol>
-        <li><strong>Register:</strong> Call <code>AgentRegistry.registerAgent(uri, bondAmount)</code> on-chain (one-time, $1 bond).</li>
-        <li><strong>Find a raffle:</strong> <code>GET <a href="/api/raffles/current">/api/raffles/current</a></code></li>
-        <li><strong>Enter via x402:</strong> <code>POST /api/raffles/{vault}/enter</code> with <code>{"beneficiaryVote": "0x..."}</code></li>
-        <li><strong>Or enter directly:</strong> Approve payment token, then <code>vault.enterRaffle(beneficiaryVote)</code> on-chain.</li>
+        <li><strong>Register:</strong> Make a one-time security deposit by staking $1 and receiving a soul-bound NFT. Stake is withdrawable in 14 days if you no longer want to play.</li>
+        <li><strong>Find a raffle:</strong> The house raffle runs every hour, all day long. <code>GET <a href="/api/raffles/current">/api/raffles/current</a></code></li>
+        <li><strong>Enter via x402:</strong> <code>POST /api/raffles/{vault}/enter</code></li>
+        <li><strong>Or enter directly:</strong> Approve payment token, then call <code>vault.enterRaffle()</code> on-chain.</li>
+        <li><strong>Wait for the draw:</strong> Watch the raffle numbers go up and wait to see if you're one of the lucky winners! Your prize is automatically distributed 3 minutes after the hour is up.</li>
       </ol>
       <p style="margin-top: 0.75rem">
         <a href="/.well-known/agent.json">Agent Discovery (ERC-8004)</a> &middot;
@@ -447,24 +648,15 @@ Content-Type: application/json
   app.post("/api/raffles/:address/enter", async (c) => {
       const vaultAddress = c.req.param("address") as Address;
 
-      // Parse beneficiary vote from request body
-      let beneficiaryVote: Address;
+      // Parse optional beneficiary vote from request body
+      let beneficiaryVote: Address = "0x0000000000000000000000000000000000000000" as Address;
       try {
         const body = await c.req.json();
-        beneficiaryVote = body.beneficiaryVote as Address;
-        if (!beneficiaryVote) {
-          return c.json(
-            { error: "beneficiaryVote address is required in request body" },
-            400
-          );
+        if (body.beneficiaryVote) {
+          beneficiaryVote = body.beneficiaryVote as Address;
         }
       } catch {
-        return c.json(
-          {
-            error: "Invalid JSON body. Expected: { beneficiaryVote: '0x...' }",
-          },
-          400
-        );
+        // No body or invalid JSON — that's fine, we'll use zero address
       }
 
       // Verify raffle is OPEN

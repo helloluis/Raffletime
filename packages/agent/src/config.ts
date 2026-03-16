@@ -28,13 +28,13 @@ export const config = {
 
   // Raffle defaults
   raffle: {
-    name: "Eyes on the Prize",
+    name: "House Raffle",
     description: "Hourly house raffle by RaffleTime",
     ticketPrice: BigInt(process.env.TICKET_PRICE || "100000000000000000"), // $0.10
     maxEntriesPerUser: 1n,
     numWinners: 1n,
-    winnerShareBps: 9000n, // 90%
-    beneficiaryShareBps: 1000n, // 10%
+    winnerShareBps: BigInt(process.env.WINNER_SHARE_BPS || "10000"), // 100% to winners by default
+    beneficiaryShareBps: BigInt(process.env.BENEFICIARY_SHARE_BPS || "0"), // 0% to beneficiary by default
     duration: BigInt(process.env.RAFFLE_DURATION || "3600"), // 1 hour
     targetPoolSize: BigInt(
       process.env.TARGET_POOL_SIZE || "100000000000000000000"
