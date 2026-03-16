@@ -1199,10 +1199,22 @@ export function createApi(): Hono {
               chainId: CHAIN_ID,
               chainName: '${config.chainId === 42220 ? "Celo" : "Celo Sepolia"}',
               rpcUrls: ['${config.rpcUrl}'],
-              nativeCurrency: {name:'CELO',symbol:'CELO',decimals:18}
+              nativeCurrency: {name:'CELO',symbol:'CELO',decimals:18},
+              blockExplorerUrls: ['${config.chainId === 42220 ? "https://celoscan.io" : "https://sepolia.celoscan.io"}']
             }]});
           }
         }
+        // Add payment token to wallet so user can see their balance
+        try{
+          await window.ethereum.request({method:'wallet_watchAsset',params:{
+            type:'ERC20',
+            options:{
+              address: TOKEN,
+              symbol: '${config.chainId === 42220 ? "cUSD" : "FcUSD"}',
+              decimals: 18
+            }
+          }});
+        } catch(e){ /* user rejected or already added */ }
       }
 
       async function checkRegistration(){
