@@ -3,7 +3,7 @@
  * Checks all player balances periodically. Alerts on:
  * - Low balance (player can't afford next raffle)
  * - High balance (player won big, should sweep)
- * - Zero CELO (can't pay gas)
+ * - Zero ETH (can't pay gas)
  */
 
 import { createPublicClient, http, defineChain, type Address } from "viem";
@@ -20,8 +20,8 @@ const ALERT_COOLDOWN_MS = 6 * 60 * 60 * 1000;
 
 const chain = defineChain({
   id: config.chainId,
-  name: config.chainId === 42220 ? "Celo" : "Celo Sepolia",
-  nativeCurrency: { name: "CELO", symbol: "CELO", decimals: 18 },
+  name: config.chainId === 8453 ? "Base" : "Base Sepolia",
+  nativeCurrency: { name: "Ether", symbol: "ETH", decimals: 18 },
   rpcUrls: { default: { http: [config.rpcUrl] } },
 });
 
@@ -95,9 +95,9 @@ export async function checkBalances(): Promise<string[]> {
       alerts.push(msg);
     }
 
-    // Zero CELO (can't transact)
+    // Zero ETH (can't transact)
     if (celoBal === 0n && player.registered && !onCooldown) {
-      const msg = `🚨 *No gas*: ${player.name} has 0 CELO — cannot transact`;
+      const msg = `🚨 *No gas*: ${player.name} has 0 ETH — cannot transact`;
       alerts.push(msg);
       lastAlerted.set(player.address, now);
     }

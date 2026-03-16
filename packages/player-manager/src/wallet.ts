@@ -1,11 +1,13 @@
 /**
- * HD wallet management for house players.
- * Derives player wallets from a single BIP-39 mnemonic using standard derivation paths.
- * Mnemonic stored encrypted on disk. Individual keys derived on-the-fly.
+ * HD wallet management powered by Tether WDK.
+ * Player wallets are derived from a single BIP-39 mnemonic using WDK's
+ * index-based derivation. The mnemonic is stored encrypted on disk.
  */
 
-import { mnemonicToAccount, generateMnemonic, english } from "viem/accounts";
-import { createPublicClient, createWalletClient, http, type Address, type Chain } from "viem";
+import WDK from "@tetherto/wdk";
+import WalletManagerEvm from "@tetherto/wdk-wallet-evm";
+import { mnemonicToAccount } from "viem/accounts";
+import { type Address } from "viem";
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from "fs";
 import { resolve, dirname } from "path";
 import { fileURLToPath } from "url";
@@ -19,7 +21,7 @@ function ensureDataDir() {
   if (!existsSync(DATA_DIR)) mkdirSync(DATA_DIR, { recursive: true });
 }
 
-// ============ Encryption ============
+// ============ Encryption (unchanged — compatible with existing seeds) ============
 
 function encrypt(text: string, password: string): string {
   const salt = randomBytes(16);
@@ -42,18 +44,18 @@ function decrypt(data: string, password: string): string {
   return decrypted;
 }
 
-// ============ Mnemonic management ============
+// ============ Seed management ============
 
-/** Generate a new mnemonic and save it encrypted */
+/** Generate a new mnemonic using WDK and save it encrypted */
 export function initSeed(password: string): string {
   ensureDataDir();
   if (existsSync(MNEMONIC_FILE)) {
     throw new Error("Seed already exists. Delete data/seed.enc to regenerate.");
   }
-  const mnemonic = generateMnemonic(english);
+  const mnemonic = WDK.getRandomSeedPhrase();
   const encrypted = encrypt(mnemonic, password);
   writeFileSync(MNEMONIC_FILE, encrypted, { mode: 0o600 });
-  console.log("Seed generated and encrypted. Back up your mnemonic securely:");
+  console.log("WDK seed generated and encrypted. Back up your mnemonic securely:");
   console.log(`  ${mnemonic}`);
   return mnemonic;
 }
@@ -72,37 +74,24 @@ export function seedExists(): boolean {
   return existsSync(MNEMONIC_FILE);
 }
 
-// ============ Player derivation ============
+// ============ WDK instance ============
 
-/** Standard derivation path for player N: m/44'/60'/0'/0/N */
-function derivationPath(index: number): string {
-  return `m/44'/60'/0'/0/${index}`;
+/** Create a WDK instance registered for EVM (Base) */
+export function createWdk(mnemonic: string, rpcUrl: string, chainId: number): WDK {
+  return (new WDK(mnemonic) as any)
+    .registerWallet("evm", WalletManagerEvm, { rpcUrl, chainId }) as WDK;
 }
 
-/** Get a player's account (address + signing capability) */
-export function getPlayerAccount(mnemonic: string, index: number) {
-  return mnemonicToAccount(mnemonic, { addressIndex: index });
+/** Get a WDK account for a player by index (index-based HD derivation) */
+export async function getWdkAccount(wdk: WDK, index: number) {
+  return (wdk as any).getAccount("evm", index);
 }
 
-/** Get a player's address without full account (cheaper) */
+// ============ Address helpers (viem — cheap, no RPC needed) ============
+
+/** Get a player's address without spinning up a full WDK instance */
 export function getPlayerAddress(mnemonic: string, index: number): Address {
-  const account = mnemonicToAccount(mnemonic, { addressIndex: index });
-  return account.address;
-}
-
-/** Get a wallet client for a specific player */
-export function getPlayerWalletClient(
-  mnemonic: string,
-  index: number,
-  chain: Chain,
-  rpcUrl: string
-) {
-  const account = mnemonicToAccount(mnemonic, { addressIndex: index });
-  return createWalletClient({
-    account,
-    chain,
-    transport: http(rpcUrl),
-  });
+  return mnemonicToAccount(mnemonic, { addressIndex: index }).address;
 }
 
 /** Get addresses for players 0..count-1 */

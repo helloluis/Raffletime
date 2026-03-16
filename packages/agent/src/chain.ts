@@ -8,30 +8,15 @@ import {
   type Chain,
 } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
-import { celoAlfajores, celo } from "viem/chains";
-import { defineChain } from "viem";
+import { base, baseSepolia } from "viem/chains";
 import { config } from "./config.js";
 
-const celoSepolia = defineChain({
-  id: 11142220,
-  name: "Celo Sepolia",
-  nativeCurrency: { name: "CELO", symbol: "CELO", decimals: 18 },
-  rpcUrls: {
-    default: { http: ["https://forno.celo-sepolia.celo-testnet.org"] },
-  },
-  blockExplorers: {
-    default: { name: "CeloScan", url: "https://sepolia.celoscan.io" },
-  },
-  testnet: true,
-});
-
 const chains: Record<number, Chain> = {
-  11142220: celoSepolia,
-  44787: celoAlfajores,
-  42220: celo,
+  8453: base,
+  84532: baseSepolia,
 };
 
-const chain = chains[config.chainId] ?? celoSepolia;
+const chain = chains[config.chainId] ?? baseSepolia;
 
 export const publicClient: PublicClient = createPublicClient({
   chain,

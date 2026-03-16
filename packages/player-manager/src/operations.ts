@@ -1,23 +1,30 @@
 /**
  * Player operations: create, fund, register, enter raffle, rebalance, sweep.
+ * Wallet signing powered by Tether WDK (@tetherto/wdk + @tetherto/wdk-wallet-evm).
  */
 
 import {
-  createPublicClient, http, formatEther, parseEther, defineChain, type Address, type Chain,
+  createPublicClient, createWalletClient, http, parseEther, encodeFunctionData,
+  defineChain, type Address,
 } from "viem";
+import { privateKeyToAccount } from "viem/accounts";
 import {
-  getPlayerAccount, getPlayerAddress, getPlayerWalletClient, loadSeed,
+  createWdk, getWdkAccount, getPlayerAddress, loadSeed,
 } from "./wallet.js";
 import {
   type Player, type RiskProfile, addPlayer, updatePlayer, loadRegistry,
-  getActivePlayers, ticketsForProfile, nameForIndex, saveRegistry,
+  getActivePlayers, ticketsForProfile, nameForIndex,
 } from "./registry.js";
 import { config } from "./config.js";
 
+function formatUsd6(raw: bigint): string {
+  return (Number(raw) / 1e6).toFixed(2);
+}
+
 const chain = defineChain({
   id: config.chainId,
-  name: config.chainId === 42220 ? "Celo" : "Celo Sepolia",
-  nativeCurrency: { name: "CELO", symbol: "CELO", decimals: 18 },
+  name: config.chainId === 8453 ? "Base" : "Base Sepolia",
+  nativeCurrency: { name: "Ether", symbol: "ETH", decimals: 18 },
   rpcUrls: { default: { http: [config.rpcUrl] } },
 });
 
@@ -28,6 +35,7 @@ const ERC20_ABI = [
   { name: "balanceOf", type: "function", stateMutability: "view", inputs: [{ name: "account", type: "address" }], outputs: [{ name: "", type: "uint256" }] },
   { name: "transfer", type: "function", stateMutability: "nonpayable", inputs: [{ name: "to", type: "address" }, { name: "amount", type: "uint256" }], outputs: [{ name: "", type: "bool" }] },
   { name: "mint", type: "function", stateMutability: "nonpayable", inputs: [{ name: "to", type: "address" }, { name: "amount", type: "uint256" }], outputs: [] },
+  { name: "decimals", type: "function", stateMutability: "view", inputs: [], outputs: [{ name: "", type: "uint8" }] },
 ] as const;
 
 const AGENT_REG_ABI = [
@@ -69,8 +77,8 @@ export async function createPlayers(
       registered: false,
       agentId: null,
       paused: false,
-      budgetTotal: opts.budgetTotal || "50000000", // $50 in 6-decimal USD
-      budgetPerRaffle: opts.budgetPerRaffle || parseEther("0.30").toString(),
+      budgetTotal: opts.budgetTotal || "50000000",  // $50 USDC (6 decimals)
+      budgetPerRaffle: opts.budgetPerRaffle || "300000",  // $0.30 USDC per raffle
       riskProfile: opts.riskProfile || "moderate",
       totalSpent: "0",
       totalWon: "0",
@@ -82,7 +90,7 @@ export async function createPlayers(
 
     addPlayer(player);
     created.push(player);
-    console.log(`  Created ${name} (${address.slice(0, 10)}...) [${index}]`);
+    console.log(`  Created ${name} (${address.slice(0, 10)}...) [index ${index}]`);
   }
 
   return created;
@@ -93,53 +101,50 @@ export async function createPlayers(
 export async function fundPlayers(
   seedPassword: string,
   treasuryKey: `0x${string}`,
-  opts: { celoAmount?: bigint; tokenAmount?: bigint } = {}
+  opts: { ethAmount?: bigint; tokenAmount?: bigint } = {}
 ): Promise<void> {
   const mnemonic = loadSeed(seedPassword);
   const players = loadRegistry().filter((p) => !p.paused);
-  const celoAmt = opts.celoAmount || parseEther("0.1");
-  // Detect token decimals — USDC=6, cUSD=18
-  let tokenDecimals = 18;
+  const ethAmt = opts.ethAmount || parseEther("0.005"); // 0.005 ETH for gas
+
+  // Detect token decimals — USDC=6, mock=18
+  let tokenDecimals = 6;
   try {
     const dec = await publicClient.readContract({
-      address: config.paymentToken,
-      abi: [{ name: "decimals", type: "function", stateMutability: "view", inputs: [], outputs: [{ name: "", type: "uint8" }] }] as const,
-      functionName: "decimals",
+      address: config.paymentToken, abi: ERC20_ABI, functionName: "decimals",
     });
     tokenDecimals = Number(dec);
   } catch {}
-  const tokenAmt = opts.tokenAmount || BigInt(5 * (10 ** tokenDecimals)); // $5 in token's decimals
+  const tokenAmt = opts.tokenAmount || BigInt(5 * (10 ** tokenDecimals)); // $5
 
-  const treasuryAccount = (await import("viem/accounts")).privateKeyToAccount(treasuryKey);
-  const treasuryWallet = (await import("viem")).createWalletClient({
+  const treasuryAccount = privateKeyToAccount(treasuryKey);
+  const treasuryWallet = createWalletClient({
     account: treasuryAccount, chain, transport: http(config.rpcUrl),
   });
 
   for (const player of players) {
     // Check treasury balances before each player to avoid over-spending
-    const treasuryCelo = await publicClient.getBalance({ address: treasuryAccount.address });
+    const treasuryEth = await publicClient.getBalance({ address: treasuryAccount.address });
     const treasuryTokens = (await publicClient.readContract({
       address: config.paymentToken, abi: ERC20_ABI, functionName: "balanceOf",
       args: [treasuryAccount.address],
     })) as bigint;
 
-    // Check CELO balance
-    const celoBalance = await publicClient.getBalance({ address: player.address as Address });
-    if (celoBalance < celoAmt) {
-      if (treasuryCelo < celoAmt + parseEther("0.01")) { // keep some for gas
-        console.log(`  ${player.name}: skipped (treasury low on CELO)`);
+    // Top up ETH for gas
+    const ethBalance = await publicClient.getBalance({ address: player.address as Address });
+    if (ethBalance < ethAmt) {
+      if (treasuryEth < ethAmt + parseEther("0.002")) {
+        console.log(`  ${player.name}: skipped (treasury low on ETH)`);
         continue;
       }
       const hash = await treasuryWallet.sendTransaction({
-        to: player.address as Address,
-        value: celoAmt,
-        chain,
+        to: player.address as Address, value: ethAmt, chain,
       } as any);
       await publicClient.waitForTransactionReceipt({ hash });
-      console.log(`  ${player.name}: funded ${formatEther(celoAmt)} CELO`);
+      console.log(`  ${player.name}: funded ${Number(ethAmt) / 1e18} ETH`);
     }
 
-    // Check token balance
+    // Top up tokens
     const tokenBalance = (await publicClient.readContract({
       address: config.paymentToken, abi: ERC20_ABI, functionName: "balanceOf",
       args: [player.address as Address],
@@ -147,11 +152,10 @@ export async function fundPlayers(
 
     if (tokenBalance < tokenAmt) {
       if (treasuryTokens < tokenAmt) {
-        console.log(`  ${player.name}: skipped (treasury low on tokens: $${(Number(treasuryTokens) / (10 ** tokenDecimals)).toFixed(2)})`);
+        console.log(`  ${player.name}: skipped (treasury low on tokens: $${formatUsd6(treasuryTokens)})`);
         continue;
       }
       const needed = tokenAmt - tokenBalance;
-      // If mock token, mint. Otherwise transfer from treasury.
       if (config.isMockToken) {
         const hash = await treasuryWallet.writeContract({
           address: config.paymentToken, abi: ERC20_ABI, functionName: "mint",
@@ -171,17 +175,16 @@ export async function fundPlayers(
   }
 }
 
-// ============ Register players ============
+// ============ Register players (WDK signs transactions) ============
 
 export async function registerPlayers(seedPassword: string): Promise<void> {
   const mnemonic = loadSeed(seedPassword);
+  const wdk = createWdk(mnemonic, config.rpcUrl, config.chainId);
   const players = loadRegistry().filter((p) => !p.registered && !p.paused);
 
   for (const player of players) {
-    const wallet = getPlayerWalletClient(mnemonic, player.index, chain, config.rpcUrl);
     const address = player.address as Address;
 
-    // Check if already registered on-chain
     const isReg = (await publicClient.readContract({
       address: config.agentRegistry, abi: AGENT_REG_ABI, functionName: "isRegistered",
       args: [address],
@@ -193,31 +196,39 @@ export async function registerPlayers(seedPassword: string): Promise<void> {
       continue;
     }
 
-    // Approve bond
-    const bond = BigInt(1000000); // $1 USDC (6 decimals)
-    let hash = await wallet.writeContract({
-      address: config.paymentToken, abi: ERC20_ABI, functionName: "approve",
-      args: [config.agentRegistry, bond],
-    } as any);
-    await publicClient.waitForTransactionReceipt({ hash });
+    const account = await getWdkAccount(wdk, player.index);
+    const bond = BigInt(1000000); // $1 USDC
 
-    // Register
+    // Approve bond via WDK
+    const approveData = encodeFunctionData({
+      abi: ERC20_ABI, functionName: "approve",
+      args: [config.agentRegistry, bond],
+    });
+    const { hash: approveHash } = await account.sendTransaction({
+      to: config.paymentToken, data: approveData,
+    });
+    await publicClient.waitForTransactionReceipt({ hash: approveHash });
+
+    // Register via WDK
     const uri = `https://raffletime.io/agents/${player.name.toLowerCase().replace(/\s+/g, "-")}.json`;
-    hash = await wallet.writeContract({
-      address: config.agentRegistry, abi: AGENT_REG_ABI, functionName: "registerAgent",
+    const registerData = encodeFunctionData({
+      abi: AGENT_REG_ABI, functionName: "registerAgent",
       args: [uri, bond],
-    } as any);
-    await publicClient.waitForTransactionReceipt({ hash });
+    });
+    const { hash: regHash } = await account.sendTransaction({
+      to: config.agentRegistry, data: registerData,
+    });
+    await publicClient.waitForTransactionReceipt({ hash: regHash });
 
     updatePlayer(player.index, {
       registered: true,
       totalSpent: (BigInt(player.totalSpent) + bond).toString(),
     });
-    console.log(`  ${player.name}: registered (bond $1)`);
+    console.log(`  ${player.name}: registered via WDK (bond $1 USDC)`);
   }
 }
 
-// ============ Enter raffle ============
+// ============ Enter raffle (WDK signs transactions) ============
 
 export async function enterRaffle(
   seedPassword: string,
@@ -225,17 +236,16 @@ export async function enterRaffle(
   playerSubset?: Player[]
 ): Promise<{ entered: string[]; skipped: string[] }> {
   const mnemonic = loadSeed(seedPassword);
+  const wdk = createWdk(mnemonic, config.rpcUrl, config.chainId);
   const players = playerSubset || getActivePlayers();
   const entered: string[] = [];
   const skipped: string[] = [];
 
-  // Check vault state
   const state = (await publicClient.readContract({
     address: vault, abi: VAULT_ABI, functionName: "state",
   })) as number;
   if (state !== 1) throw new Error(`Raffle not open (state ${state})`);
 
-  // Get beneficiary
   let beneficiary: Address = "0x0000000000000000000000000000000000000000";
   try {
     const bens = (await publicClient.readContract({
@@ -244,10 +254,9 @@ export async function enterRaffle(
     if (bens.length > 0) beneficiary = bens[0];
   } catch {}
 
-  const ticketPrice = BigInt(100000); // $0.10 in 6-decimal USD
+  const ticketPrice = BigInt(100000); // $0.10 USDC
 
   for (const player of players) {
-    // Budget check
     const spent = BigInt(player.totalSpent);
     const budgetTotal = BigInt(player.budgetTotal);
     const budgetPerRaffle = BigInt(player.budgetPerRaffle);
@@ -263,23 +272,29 @@ export async function enterRaffle(
       continue;
     }
 
-    const wallet = getPlayerWalletClient(mnemonic, player.index, chain, config.rpcUrl);
+    const account = await getWdkAccount(wdk, player.index);
 
     try {
       for (let t = 0; t < tickets; t++) {
-        // Approve
-        let hash = await wallet.writeContract({
-          address: config.paymentToken, abi: ERC20_ABI, functionName: "approve",
+        // Approve ticket price via WDK
+        const approveData = encodeFunctionData({
+          abi: ERC20_ABI, functionName: "approve",
           args: [vault, ticketPrice],
-        } as any);
-        await publicClient.waitForTransactionReceipt({ hash });
+        });
+        const { hash: approveHash } = await account.sendTransaction({
+          to: config.paymentToken, data: approveData,
+        });
+        await publicClient.waitForTransactionReceipt({ hash: approveHash });
 
-        // Enter
-        hash = await wallet.writeContract({
-          address: vault, abi: VAULT_ABI, functionName: "enterRaffle",
-          args: ["0x0000000000000000000000000000000000000000" as Address, beneficiary],
-        } as any);
-        await publicClient.waitForTransactionReceipt({ hash });
+        // Enter raffle via WDK
+        const enterData = encodeFunctionData({
+          abi: VAULT_ABI, functionName: "enterRaffle",
+          args: [config.paymentToken, beneficiary],
+        });
+        const { hash: enterHash } = await account.sendTransaction({
+          to: vault, data: enterData,
+        });
+        await publicClient.waitForTransactionReceipt({ hash: enterHash });
       }
 
       updatePlayer(player.index, {
@@ -287,8 +302,7 @@ export async function enterRaffle(
         rafflesEntered: player.rafflesEntered + 1,
         lastActive: new Date().toISOString(),
       });
-
-      entered.push(`${player.name}: ${tickets} ticket${tickets > 1 ? "s" : ""} ($${formatEther(cost)})`);
+      entered.push(`${player.name}: ${tickets} ticket${tickets > 1 ? "s" : ""} ($${formatUsd6(cost)})`);
     } catch (e) {
       skipped.push(`${player.name}: tx failed — ${String(e).slice(0, 60)}`);
     }
@@ -297,16 +311,16 @@ export async function enterRaffle(
   return { entered, skipped };
 }
 
-// ============ Rebalance ============
+// ============ Rebalance (WDK signs transfers) ============
 
 export async function rebalancePlayers(
   seedPassword: string,
-  targetBalance: bigint = parseEther("3")
+  targetBalance: bigint = BigInt(3_000_000) // $3 USDC
 ): Promise<void> {
   const mnemonic = loadSeed(seedPassword);
+  const wdk = createWdk(mnemonic, config.rpcUrl, config.chainId);
   const players = loadRegistry().filter((p) => !p.paused);
 
-  // Find rich and poor players
   const balances: { player: Player; balance: bigint }[] = [];
   for (const p of players) {
     const bal = (await publicClient.readContract({
@@ -321,30 +335,33 @@ export async function rebalancePlayers(
 
   for (const poorPlayer of poor) {
     const needed = targetBalance - poorPlayer.balance;
-    // Find a rich player to transfer from
     const donor = rich.find((r) => r.balance > needed + targetBalance);
     if (!donor) continue;
 
-    const donorWallet = getPlayerWalletClient(mnemonic, donor.player.index, chain, config.rpcUrl);
-    const hash = await donorWallet.writeContract({
-      address: config.paymentToken, abi: ERC20_ABI, functionName: "transfer",
+    const donorAccount = await getWdkAccount(wdk, donor.player.index);
+    const transferData = encodeFunctionData({
+      abi: ERC20_ABI, functionName: "transfer",
       args: [poorPlayer.player.address as Address, needed],
-    } as any);
+    });
+    const { hash } = await donorAccount.sendTransaction({
+      to: config.paymentToken, data: transferData,
+    });
     await publicClient.waitForTransactionReceipt({ hash });
 
     donor.balance -= needed;
-    console.log(`  ${donor.player.name} → ${poorPlayer.player.name}: $${formatEther(needed)}`);
+    console.log(`  ${donor.player.name} → ${poorPlayer.player.name}: $${formatUsd6(needed)}`);
   }
 }
 
-// ============ Sweep winnings ============
+// ============ Sweep winnings (WDK signs transfers) ============
 
 export async function sweepWinnings(
   seedPassword: string,
   coldWallet: Address,
-  threshold: bigint = BigInt(10000000) // $10 USDC
+  threshold: bigint = BigInt(10_000_000) // $10 USDC
 ): Promise<void> {
   const mnemonic = loadSeed(seedPassword);
+  const wdk = createWdk(mnemonic, config.rpcUrl, config.chainId);
   const players = loadRegistry();
 
   for (const p of players) {
@@ -354,14 +371,17 @@ export async function sweepWinnings(
     })) as bigint;
 
     if (balance > threshold) {
-      const sweepAmount = balance - BigInt(1000000); // Keep $1 USDC
-      const wallet = getPlayerWalletClient(mnemonic, p.index, chain, config.rpcUrl);
-      const hash = await wallet.writeContract({
-        address: config.paymentToken, abi: ERC20_ABI, functionName: "transfer",
+      const sweepAmount = balance - BigInt(1_000_000); // Keep $1 USDC
+      const account = await getWdkAccount(wdk, p.index);
+      const transferData = encodeFunctionData({
+        abi: ERC20_ABI, functionName: "transfer",
         args: [coldWallet, sweepAmount],
-      } as any);
+      });
+      const { hash } = await account.sendTransaction({
+        to: config.paymentToken, data: transferData,
+      });
       await publicClient.waitForTransactionReceipt({ hash });
-      console.log(`  ${p.name}: swept $${formatEther(sweepAmount)} → cold wallet`);
+      console.log(`  ${p.name}: swept $${formatUsd6(sweepAmount)} → cold wallet`);
     }
   }
 }
@@ -384,17 +404,17 @@ export async function getStatus(seedPassword: string): Promise<string[]> {
         address: config.paymentToken, abi: ERC20_ABI, functionName: "balanceOf",
         args: [p.address as Address],
       })) as bigint;
-      balance = `$${parseFloat(formatEther(bal)).toFixed(2)}`;
+      balance = `$${formatUsd6(bal)}`;
     } catch {}
 
-    const spent = parseFloat(formatEther(BigInt(p.totalSpent)));
-    const won = parseFloat(formatEther(BigInt(p.totalWon)));
-    const pnl = won - spent;
+    const spent = (Number(BigInt(p.totalSpent)) / 1e6).toFixed(2);
+    const won = (Number(BigInt(p.totalWon)) / 1e6).toFixed(2);
+    const pnl = parseFloat(won) - parseFloat(spent);
     const pnlStr = pnl >= 0 ? `+$${pnl.toFixed(2)}` : `-$${Math.abs(pnl).toFixed(2)}`;
     const status = p.paused ? " [PAUSED]" : "";
 
     lines.push(
-      `${(p.name + status).padEnd(16)} ${p.address.slice(0,6)}...${p.address.slice(-4)}  ${balance.padStart(10)} ${("$" + spent.toFixed(2)).padStart(10)} ${("$" + won.toFixed(2)).padStart(10)} ${pnlStr.padStart(10)} ${p.riskProfile.padStart(12)} ${String(p.rafflesEntered).padStart(7)}`
+      `${(p.name + status).padEnd(16)} ${p.address.slice(0,6)}...${p.address.slice(-4)}  ${balance.padStart(10)} ${("$" + spent).padStart(10)} ${("$" + won).padStart(10)} ${pnlStr.padStart(10)} ${p.riskProfile.padStart(12)} ${String(p.rafflesEntered).padStart(7)}`
     );
   }
 

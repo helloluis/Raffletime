@@ -3,8 +3,8 @@ import { type Address } from "viem";
 // Contract addresses — set via environment or defaults for Alfajores testnet
 export const config = {
   // Chain
-  chainId: parseInt(process.env.CHAIN_ID || "11142220"), // Celo Sepolia
-  rpcUrl: process.env.RPC_URL || "https://forno.celo-sepolia.celo-testnet.org",
+  chainId: parseInt(process.env.CHAIN_ID || "84532"), // Base Sepolia
+  rpcUrl: process.env.RPC_URL || "https://sepolia.base.org",
 
   // Contract addresses (deploy and update these)
   contracts: {
@@ -12,7 +12,7 @@ export const config = {
     registry: (process.env.REGISTRY_ADDRESS || "0x") as Address,
     agentRegistry: (process.env.AGENT_REGISTRY_ADDRESS || "0x") as Address,
     paymentToken: (process.env.PAYMENT_TOKEN_ADDRESS ||
-      "0x765DE816845861e75A25fCA122bb6898B8B1282a") as Address, // stablecoin
+      "0x036CbD53842c5426634e7929541eC2318f3dCF7e") as Address, // USDC on Base Sepolia
   },
 
   // House agent wallet

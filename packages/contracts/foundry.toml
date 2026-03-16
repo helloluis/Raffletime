@@ -15,6 +15,10 @@ remappings = [
 [profile.default.fuzz]
 runs = 256
 
+[rpc_endpoints]
+base_sepolia = "https://sepolia.base.org"
+base = "https://mainnet.base.org"
+
 [fmt]
 line_length = 120
 tab_width = 4

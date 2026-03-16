@@ -460,11 +460,10 @@ export const houseIcon = `<svg width="12" height="12" viewBox="0 0 12 12" fill="
 /** Get block explorer URL for an address */
 export function explorerLink(address: string, chainId: number): string {
   const explorers: Record<number, string> = {
-    42220: "https://celoscan.io/address/",
-    44787: "https://alfajores.celoscan.io/address/",
-    11142220: "https://sepolia.celoscan.io/address/",
+    8453: "https://basescan.org/address/",
+    84532: "https://sepolia.basescan.org/address/",
   };
-  const base = explorers[chainId] || "https://sepolia.celoscan.io/address/";
+  const base = explorers[chainId] || "https://sepolia.basescan.org/address/";
   return `<a href="${base}${address}" target="_blank" style="color:inherit"><code>${address}</code></a>`;
 }
 

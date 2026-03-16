@@ -406,14 +406,14 @@ export async function closeRaffle(vault: Address): Promise<void> {
 export async function requestDraw(vault: Address): Promise<void> {
   console.log("[lifecycle] Requesting draw:", vault);
   const wallet = getWalletClient();
-  // requestDraw is payable — send CELO for the randomness oracle fee
-  // MockRandomness fee is 0, real Witnet fee is small
+  // requestDraw is payable — send ETH for the randomness oracle fee
+  // MockRandomness fee is 0, real oracle fee is small
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const hash = await wallet.writeContract({
     address: vault,
     abi: RaffleVaultAbi,
     functionName: "requestDraw",
-    value: 100000000000000000n, // 0.1 CELO — overpay, excess is refunded
+    value: 100000000000000000n, // 0.1 ETH — overpay, excess is refunded
   } as any);
   await publicClient.waitForTransactionReceipt({ hash });
   console.log("[lifecycle] Draw requested:", hash);

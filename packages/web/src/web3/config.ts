@@ -1,27 +1,9 @@
-import { http, type Chain } from "wagmi";
-import { celo, celoAlfajores } from "wagmi/chains";
+import { http } from "wagmi";
+import { base, baseSepolia } from "wagmi/chains";
 import { getDefaultConfig } from "@rainbow-me/rainbowkit";
 
-const celoSepolia: Chain = {
-  id: 11142220,
-  name: "Celo Sepolia",
-  nativeCurrency: { name: "CELO", symbol: "CELO", decimals: 18 },
-  rpcUrls: {
-    default: { http: ["https://forno.celo-sepolia.celo-testnet.org"] },
-  },
-  blockExplorers: {
-    default: { name: "CeloScan", url: "https://sepolia.celoscan.io" },
-  },
-  testnet: true,
-};
-
-const chains: Record<string, Chain> = {
-  mainnet: celo,
-  alfajores: celoAlfajores,
-  sepolia: celoSepolia,
-};
-
-const activeChain = chains[import.meta.env.VITE_CHAIN || "sepolia"] || celoSepolia;
+const chains = { mainnet: base, sepolia: baseSepolia };
+const activeChain = chains[import.meta.env.VITE_CHAIN as keyof typeof chains] ?? baseSepolia;
 
 export const wagmiConfig = getDefaultConfig({
   appName: "RaffleTime",
@@ -36,8 +18,7 @@ export const wagmiConfig = getDefaultConfig({
 export const contracts = {
   factory: (import.meta.env.VITE_FACTORY_ADDRESS || "0x") as `0x${string}`,
   registry: (import.meta.env.VITE_REGISTRY_ADDRESS || "0x") as `0x${string}`,
-  agentRegistry: (import.meta.env.VITE_AGENT_REGISTRY_ADDRESS ||
-    "0x") as `0x${string}`,
+  agentRegistry: (import.meta.env.VITE_AGENT_REGISTRY_ADDRESS || "0x") as `0x${string}`,
   paymentToken: (import.meta.env.VITE_PAYMENT_TOKEN_ADDRESS ||
-    "0x874069Fa1Eb16D44d622F2e0Ca25eeA172369bC1") as `0x${string}`,
+    "0x036CbD53842c5426634e7929541eC2318f3dCF7e") as `0x${string}`, // USDC on Base Sepolia
 } as const;
