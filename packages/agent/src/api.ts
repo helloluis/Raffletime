@@ -267,12 +267,11 @@ async function buildParticipantsHtml(vault: Address, info: { participantCount: b
 
     // Check winners from DB
     const winnerSet = new Set<string>();
-    if (info.state === 5) {
+    if (info.state === 5 || info.state === 4) { // SETTLED or PAYOUT
       try {
         const result = await db.getResult(vault);
-        if (result?.winner) winnerSet.add(result.winner);
+        if (result?.winner) winnerSet.add(result.winner.toLowerCase());
       } catch {}
-      // Fallback to chain if DB empty
       if (winnerSet.size === 0) {
         try {
           const winners = (await publicClient.readContract({
@@ -289,6 +288,17 @@ async function buildParticipantsHtml(vault: Address, info: { participantCount: b
         seen.set(entry.agent, entry.tickets);
         if (entry.name) agentNames.set(entry.agent, entry.name);
         if (entry.is_house) housePlayerAddrs.add(entry.agent);
+      }
+      // Ensure winner is in the list even if entries missed them
+      for (const w of winnerSet) {
+        if (!seen.has(w)) {
+          seen.set(w, 1);
+          try {
+            const agent = await db.getAgent(w);
+            if (agent?.name) agentNames.set(w, agent.name);
+            if (agent?.is_house) housePlayerAddrs.add(w);
+          } catch {}
+        }
       }
     } else {
       // DB miss — fall back to on-chain (slow)
