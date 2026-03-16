@@ -106,13 +106,19 @@ const COVER_IMAGES = [
   "/images/raffle-confetti.png",
 ];
 
-let nameIndex = 0;
-
-/** Pick the next house raffle name (cycles through the list) */
+/** Pick a random house raffle name, avoiding recent ones */
 export function nextHouseRaffleName(): string {
-  const name = HOUSE_RAFFLE_NAMES[nameIndex % HOUSE_RAFFLE_NAMES.length];
-  nameIndex++;
-  return name;
+  const store = loadStore();
+  const recentNames = new Set(
+    Object.values(store)
+      .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
+      .slice(0, 5)
+      .map((r) => r.name)
+  );
+  // Pick randomly, excluding the last 5 used names
+  const available = HOUSE_RAFFLE_NAMES.filter((n) => !recentNames.has(n));
+  const pool = available.length > 0 ? available : HOUSE_RAFFLE_NAMES;
+  return pool[Math.floor(Math.random() * pool.length)];
 }
 
 /** Pick a random cover image */

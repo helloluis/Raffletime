@@ -587,8 +587,12 @@ export function createApi(): Hono {
 
         joinArea.style.display = 'none';
 
-        // Background color transitions
+        // Background color transitions + reset title
         timerEl.style.color = '#000';
+        var msReset = timerEl.querySelector('.ms');
+        if(msReset) msReset.style.color = '';
+        var titleReset = document.querySelector('.site-title span');
+        if(titleReset) titleReset.style.color = '';
         document.body.style.transition = 'background-color 3s ease';
         if(p === 'DRAWING_' || p === 'INVALID_'){
           document.body.style.backgroundColor = '#CCBBBB'; // fade from red to light gray
@@ -654,15 +658,24 @@ export function createApi(): Hono {
             var ms = Math.floor(d%1000);
             timerEl.innerHTML = (m<10?'0':'')+m+':'+(s<10?'0':'')+s+'<span class="ms">'+(ms<100?'0':'')+(ms<10?'0':'')+ms+'</span>';
 
-            // Final minute: snap background to red in 1s, white timer, flash JOIN button
+            // Final minute: snap background to red in 1s, white timer + ms, flash JOIN button
+            var titleSpan = document.querySelector('.site-title span');
             if(d < 60000 && d > 0){
               timerEl.style.color = '#fff';
+              // Make ms white too
+              var msEl = timerEl.querySelector('.ms');
+              if(msEl) msEl.style.color = '#fff';
               document.body.style.transition = 'background-color 1s ease';
               document.body.style.backgroundColor = '#8b1a11';
               if(joinBtn) joinBtn.classList.add('cta-urgent');
+              // Make "RAFFLE" in title white so it's readable on red
+              if(titleSpan) titleSpan.style.color = '#fff';
             } else {
               timerEl.style.color = '';
+              var msEl2 = timerEl.querySelector('.ms');
+              if(msEl2) msEl2.style.color = '';
               if(joinBtn) joinBtn.classList.remove('cta-urgent');
+              if(titleSpan) titleSpan.style.color = '';
             }
 
             if(d <= 0) setPhase('DRAWING_');
@@ -677,17 +690,20 @@ export function createApi(): Hono {
           }
         }
 
-        // Phase auto-advance based on elapsed time
+        // Phase auto-advance based on elapsed time + server state
         if(phase){
           var elapsed = now - phaseStart;
 
           // SUCCESS path
-          if(phase === 'DRAWING_' && elapsed > 30000){
+          if(phase === 'DRAWING_'){
+            // Advance immediately if server already moved past drawing
             if(state === 'INVALID') setPhase('INVALID_');
             else if(state === 'PAYOUT' || state === 'SETTLED') setPhase('RESULT_');
+            // Or advance after 30s timeout (server may be slow)
+            else if(elapsed > 30000) setPhase('RESULT_');
           }
           if(phase === 'RESULT_' && elapsed > 30000) setPhase('DISTRIB_');
-          if(phase === 'DISTRIB_' && elapsed > 45000) setPhase('RESET_');
+          if(phase === 'DISTRIB_' && elapsed > 15000) setPhase('RESET_');
 
           // INVALID path
           if(phase === 'INVALID_' && elapsed > 10000) setPhase('REFUND_');
