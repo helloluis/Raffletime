@@ -274,6 +274,49 @@ export function layout(title: string, body: string): string {
       color: #bbb;
     }
 
+    /* ---- Dramatic timeline animations ---- */
+
+    body { transition: background-color 3s ease; }
+
+    .cta { transition: background 0.15s, border-color 0.15s, box-shadow 0.15s; }
+
+    .cta-urgent {
+      border: 1px solid #fff;
+      animation: ctaFlash 1s infinite;
+    }
+
+    @keyframes ctaFlash {
+      0%, 49% { background: #8b1a11; }
+      50%, 100% { background: #111; }
+    }
+
+    /* ---- Previous raffles table ---- */
+
+    .prev-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.85rem;
+      margin-top: 0.75rem;
+    }
+    .prev-table th {
+      font-family: 'Space Mono', monospace;
+      font-weight: 700;
+      font-size: 0.7rem;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      text-align: left;
+      padding: 0.5rem 0.5rem 0.5rem 0;
+      color: #555;
+    }
+    .prev-table td {
+      padding: 0.4rem 0.5rem 0.4rem 0;
+      vertical-align: top;
+      font-family: 'Space Mono', monospace;
+      font-size: 0.8rem;
+    }
+    .prev-table a { color: inherit; }
+    .prev-table a:hover { color: #8b1a11; }
+
     /* ---- Responsive ---- */
 
     @media (max-width: 600px) {

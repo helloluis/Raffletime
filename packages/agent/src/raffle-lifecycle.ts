@@ -383,6 +383,37 @@ export async function advanceRaffle(vault: Address): Promise<RaffleState> {
         await completeDraw(vault);
         return await getVaultState(vault);
       }
+
+      // Auto-fulfill MockRandomness on testnet if configured
+      const mockAddr = process.env.MOCK_RANDOMNESS_ADDRESS;
+      if (mockAddr) {
+        try {
+          const randBlock = (await publicClient.readContract({
+            address: vault,
+            abi: RaffleVaultAbi,
+            functionName: "randomizeBlock",
+          })) as bigint;
+
+          if (randBlock > 0n) {
+            console.log(`[lifecycle] Auto-fulfilling mock randomness for block ${randBlock}...`);
+            const MockAbi = [{ name: "fulfillBlock", type: "function", stateMutability: "nonpayable", inputs: [{ name: "blockNumber", type: "uint256" }], outputs: [] }] as const;
+            const fulfillHash = await writeContract({
+              address: mockAddr as Address,
+              abi: MockAbi,
+              functionName: "fulfillBlock",
+              args: [randBlock],
+            });
+            await publicClient.waitForTransactionReceipt({ hash: fulfillHash });
+            console.log("[lifecycle] Mock randomness fulfilled:", fulfillHash);
+            // Now complete the draw
+            await completeDraw(vault);
+            return await getVaultState(vault);
+          }
+        } catch (e) {
+          console.log("[lifecycle] Mock fulfill failed (may already be fulfilled):", String(e).slice(0, 100));
+        }
+      }
+
       console.log("[lifecycle] Waiting for randomness oracle...");
       break;
     }

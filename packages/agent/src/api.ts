@@ -9,12 +9,90 @@ import {
 } from "./raffle-lifecycle.js";
 import { getCurrentVault } from "./scheduler.js";
 import { publicClient, getAgentAddress, getWalletClient } from "./chain.js";
-import { AgentRegistryAbi, ERC20Abi, RaffleVaultAbi } from "./abis.js";
+import { AgentRegistryAbi, ERC20Abi, RaffleVaultAbi, RaffleRegistryAbi } from "./abis.js";
 import { config } from "./config.js";
 import { createX402Middleware } from "./x402.js";
 import { getRaffleMeta, getAllRaffleMeta, type RaffleMeta } from "./raffle-store.js";
 import { layout, stateLabel, formatCash, explorerLink } from "./html.js";
 import { serveStatic } from "@hono/node-server/serve-static";
+
+/** Build HTML table of previous (settled/invalid) raffles */
+async function buildPrevRafflesHtml(): Promise<string> {
+  try {
+    const count = (await publicClient.readContract({
+      address: config.contracts.registry,
+      abi: RaffleRegistryAbi,
+      functionName: "getRaffleCount",
+    })) as bigint;
+
+    if (count === 0n) return "";
+
+    const rows: string[] = [];
+    // Scan last 20 raffles max, newest first
+    const start = count > 20n ? count - 20n : 0n;
+    for (let i = count - 1n; i >= start; i--) {
+      try {
+        const entry = (await publicClient.readContract({
+          address: config.contracts.registry,
+          abi: RaffleRegistryAbi,
+          functionName: "getRaffle",
+          args: [i],
+        })) as any;
+
+        const vault = (entry.vault || entry[0]) as Address;
+        const state = (await publicClient.readContract({
+          address: vault,
+          abi: RaffleVaultAbi,
+          functionName: "state",
+        })) as number;
+
+        // Only show settled or invalid
+        if (state !== 5 && state !== 6) continue;
+
+        const closesAt = Number(entry.closesAt || entry[4]);
+        const dt = new Date(closesAt * 1000);
+        const dateStr = `${String(dt.getMonth()+1).padStart(2,'0')}/${String(dt.getDate()).padStart(2,'0')} ${String(dt.getHours()).padStart(2,'0')}:${String(dt.getMinutes()).padStart(2,'0')}`;
+
+        let pool = "0";
+        let participants = "0";
+        let winnerHtml = "—";
+        try {
+          const tp = (await publicClient.readContract({ address: vault, abi: RaffleVaultAbi, functionName: "totalPool" })) as bigint;
+          pool = formatCash(formatEther(tp));
+          const pc = (await publicClient.readContract({ address: vault, abi: RaffleVaultAbi, functionName: "getParticipantCount" })) as bigint;
+          participants = pc.toString();
+          if (state === 5) {
+            const winners = (await publicClient.readContract({ address: vault, abi: RaffleVaultAbi, functionName: "getWinners" })) as string[];
+            if (winners.length > 0) {
+              const w = winners[0];
+              winnerHtml = `<a href="https://sepolia.celoscan.io/address/${w}" target="_blank">${w.slice(0,6)}...${w.slice(-4)}</a>`;
+            }
+          } else {
+            winnerHtml = "<em>Invalid</em>";
+          }
+        } catch {}
+
+        const shortVault = `${vault.slice(0,6)}...${vault.slice(-4)}`;
+        const vaultLink = `<a href="https://sepolia.celoscan.io/address/${vault}" target="_blank">${shortVault}</a>`;
+
+        const rowStyle = state === 6 ? ' style="opacity:0.35"' : '';
+        rows.push(`<tr${rowStyle}><td>${vaultLink}</td><td>${dateStr}</td><td>${pool}</td><td>${participants}</td><td>${winnerHtml}</td></tr>`);
+      } catch { continue; }
+    }
+
+    if (rows.length === 0) return "";
+
+    return `<div class="section">
+      <h2>Previous Raffles</h2>
+      <table class="prev-table">
+        <tr><th>Raffle</th><th>Ended</th><th>Pool</th><th>Participants</th><th>Winner</th></tr>
+        ${rows.join("\n        ")}
+      </table>
+    </div>`;
+  } catch {
+    return "";
+  }
+}
 
 export function createApi(): Hono {
   const app = new Hono();
@@ -433,6 +511,7 @@ export function createApi(): Hono {
           joinArea.innerHTML = '<a href="/raffles/'+vault+'" class="cta" id="join-btn">Join ${ticketPrice}</a>';
           joinArea.style.display = '';
           resultLine.style.display = 'none';
+          document.body.style.backgroundColor = '#908888';
         }
       });
 
@@ -461,6 +540,16 @@ export function createApi(): Hono {
         if(typeIv) clearInterval(typeIv);
 
         joinArea.style.display = 'none';
+
+        // Background color transitions
+        timerEl.style.color = '';
+        if(p === 'DRAWING_' || p === 'RESULT_' || p === 'INVALID_'){
+          document.body.style.backgroundColor = '#8b1a11'; // stay red
+        } else if(p === 'DISTRIB_' || p === 'REFUND_'){
+          document.body.style.backgroundColor = '#CCBBBB'; // fade to light gray
+        } else if(p === 'RESET_'){
+          document.body.style.backgroundColor = '#CCBBBB';
+        }
 
         if(p === 'DRAWING_'){
           resultLine.style.display = 'none';
@@ -506,6 +595,8 @@ export function createApi(): Hono {
       function tick(){
         var now = Date.now();
 
+        var joinBtn = document.getElementById('join-btn');
+
         if(!phase){
           if(state === 'OPEN'){
             // Normal countdown
@@ -515,7 +606,22 @@ export function createApi(): Hono {
             var s = Math.floor((d%60000)/1000);
             var ms = Math.floor(d%1000);
             timerEl.innerHTML = (m<10?'0':'')+m+':'+(s<10?'0':'')+s+'<span class="ms">'+(ms<100?'0':'')+(ms<10?'0':'')+ms+'</span>';
-            timerEl.style.color = (d < 60000 && d > 0) ? '#8b1a11' : '';
+
+            // Final minute: red timer, fade background to red, flash JOIN button
+            if(d < 60000 && d > 0){
+              timerEl.style.color = '#8b1a11';
+              var pct = 1 - (d / 60000); // 0 to 1
+              var r = Math.round(144 + (139 * pct)); // 0x90 -> 0x8b*2
+              var g = Math.round(136 - (110 * pct)); // 0x88 -> 0x1a
+              var b = Math.round(136 - (119 * pct)); // 0x88 -> 0x11
+              document.body.style.backgroundColor = 'rgb('+r+','+g+','+b+')';
+              if(joinBtn) joinBtn.classList.add('cta-urgent');
+            } else {
+              timerEl.style.color = '';
+              document.body.style.backgroundColor = '';
+              if(joinBtn) joinBtn.classList.remove('cta-urgent');
+            }
+
             if(d <= 0) setPhase('DRAWING_');
           } else if(state === 'CLOSED' || state === 'DRAWING'){
             setPhase('DRAWING_');
@@ -558,7 +664,7 @@ export function createApi(): Hono {
         <li><strong>Find a raffle:</strong> The house raffle runs every hour, all day long. <code>GET <a href="/api/raffles/current">/api/raffles/current</a></code></li>
         <li><strong>Enter via x402:</strong> <code>POST /api/raffles/{vault}/enter</code></li>
         <li><strong>Or enter directly:</strong> Approve payment token, then call <code>vault.enterRaffle()</code> on-chain.</li>
-        <li><strong>Wait for the draw:</strong> Watch the raffle numbers go up and wait to see if you're one of the lucky winners! Your prize is automatically distributed 3 minutes after the hour is up.</li>
+        <li><strong>Wait for the draw:</strong> Watch the raffle numbers go up and wait to see if you're one of the lucky winners! Your prize is automatically distributed 3 minutes after the hour is up. Winner selection uses tamper-proof randomness from <a href="https://docs.witnet.io/" target="_blank">Witnet</a>.</li>
       </ol>
       <p style="margin-top: 0.75rem">
         <a href="/.well-known/agent.json">Agent Discovery (ERC-8004)</a> &middot;
@@ -577,6 +683,8 @@ export function createApi(): Hono {
         <tr><td>Chain</td><td>Celo (${config.chainId})</td></tr>
       </table>
     </div>
+
+    ${await buildPrevRafflesHtml()}
     `));
   });
 
