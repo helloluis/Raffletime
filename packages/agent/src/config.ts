@@ -31,7 +31,7 @@ export const config = {
     name: "House Raffle",
     description: "Hourly house raffle by RaffleTime",
     ticketPriceUsd6: BigInt(process.env.TICKET_PRICE_USD6 || "100000"), // $0.10 in 6-decimal USD
-    maxEntriesPerUser: BigInt(process.env.MAX_ENTRIES_PER_USER || "3"),
+    maxEntriesPerUser: BigInt(process.env.MAX_ENTRIES_PER_USER || "10"),
     numWinners: 1n,
     winnerShareBps: BigInt(process.env.WINNER_SHARE_BPS || "10000"), // 100% to winners by default
     beneficiaryShareBps: BigInt(process.env.BENEFICIARY_SHARE_BPS || "0"), // 0% to beneficiary by default
