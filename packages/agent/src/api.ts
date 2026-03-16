@@ -690,8 +690,8 @@ export function createApi(): Hono {
     <div id="hero">
       <div class="countdown" id="timer">00:00<span class="ms">000</span></div>
       <div class="stats" id="stats">
-        <span id="pool">${formatCash(initialPool)}</span> <span class="spec-pill">House</span> <span class="spec-pill">1x Winner</span><br>
-        <span id="participants">${initialParticipants}</span> participants
+        To win: <span id="pool">${formatCash(initialPool)}</span> <span class="spec-pill">House</span> <span class="spec-pill">1x Winner</span><br>
+        <a href="/raffles/${initialVault}" id="participants-link" style="color:inherit;text-decoration:none;border-bottom:1px dashed #000"><span id="participants">${initialParticipants}</span> participants</a>
       </div>
       <div id="join-area">
         ${initialVault ? `<button class="cta" id="join-btn" onclick="openJoinModal()">Join ${ticketPrice}</button>` : ""}
@@ -704,6 +704,7 @@ export function createApi(): Hono {
       var timerEl = document.getElementById('timer');
       var poolEl = document.getElementById('pool');
       var partEl = document.getElementById('participants');
+      var partLink = document.getElementById('participants-link');
       var joinArea = document.getElementById('join-area');
       var resultLine = document.getElementById('result-line');
       var closesAt = ${initialClosesAt};
@@ -737,6 +738,7 @@ export function createApi(): Hono {
             resultLine.style.display = 'none';
             poolEl.textContent = '$0.00';
             partEl.textContent = '0';
+            if(partLink) partLink.href = '/raffles/'+vault;
             document.body.style.transition = 'background-color 2s ease';
             document.body.style.backgroundColor = '#908888';
           }
@@ -819,6 +821,7 @@ export function createApi(): Hono {
             phase = null;
             joinArea.innerHTML = '<button class="cta" id="join-btn" onclick="openJoinModal()">Join ${ticketPrice}</button>';
             joinArea.style.display = '';
+            if(partLink) partLink.href = '/raffles/'+vault;
             document.body.style.transition = 'background-color 2s ease';
             document.body.style.backgroundColor = '#908888';
             if(typeIv) clearInterval(typeIv);
