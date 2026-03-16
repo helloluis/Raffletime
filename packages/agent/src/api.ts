@@ -1079,9 +1079,14 @@ export function createApi(): Hono {
         </div>
 
         <div class="step" id="step-ticket">
-          <span class="step-num">4</span> Buy Ticket (${ticketPrice})
+          <span class="step-num">4</span> Buy Tickets
           <span class="step-status pending" id="status-ticket">waiting</span>
-          <p style="font-size:0.85rem;color:#555">Purchase your raffle ticket/s. Good luck!</p>
+          <p style="font-size:0.85rem;color:#555;margin:0.5rem 0">
+            <button onclick="changeQty(-1)" style="font-family:'Space Mono',monospace;width:28px;height:28px;border:1px solid #999;background:#fff;cursor:pointer;font-size:1rem">−</button>
+            <span id="ticket-qty" style="font-family:'Space Mono',monospace;font-weight:700;font-size:1.1rem;margin:0 0.5rem;vertical-align:middle">1</span>
+            <button onclick="changeQty(1)" style="font-family:'Space Mono',monospace;width:28px;height:28px;border:1px solid #999;background:#fff;cursor:pointer;font-size:1rem">+</button>
+            <span style="margin-left:0.75rem;vertical-align:middle">× ${ticketPrice} = <strong id="ticket-total">${ticketPrice}</strong></span>
+          </p>
         </div>
 
         <button class="modal-btn" id="modal-action" onclick="runJoinFlow()">Connect Wallet</button>
@@ -1102,6 +1107,14 @@ export function createApi(): Hono {
       var currentStep = 'connect'; // connect, register, badge, ticket, done
       var userAddr = null;
       var isRegistered = false;
+      var ticketQty = 1;
+      var PRICE_NUM = ${parseFloat(formatEther(config.raffle.ticketPrice))};
+
+      window.changeQty = function(delta){
+        ticketQty = Math.max(1, Math.min(10, ticketQty + delta));
+        document.getElementById('ticket-qty').textContent = ticketQty;
+        document.getElementById('ticket-total').textContent = '$' + (ticketQty * PRICE_NUM).toFixed(2);
+      };
 
       window.openJoinModal = function(){
         // Reset all steps
@@ -1111,6 +1124,11 @@ export function createApi(): Hono {
         setStatus('ticket','pending','waiting');
         showError('');
         setButtonDisabled(false);
+        ticketQty = 1;
+        var qtyEl = document.getElementById('ticket-qty');
+        var totEl = document.getElementById('ticket-total');
+        if(qtyEl) qtyEl.textContent = '1';
+        if(totEl) totEl.textContent = '$' + PRICE_NUM.toFixed(2);
         currentStep = userAddr ? 'register' : 'connect';
         setButtonText(userAddr ? 'Checking...' : 'Connect Wallet');
 
@@ -1237,13 +1255,13 @@ export function createApi(): Hono {
             setButtonDisabled(false);
 
           } else if(currentStep === 'ticket'){
-            // Step 4a: Approve ticket
-            setStatus('ticket','active','approving...');
-            await window.ethereum.request({method:'eth_sendTransaction',params:[{from:userAddr,to:TOKEN,data:encodeApprove(VAULT,TICKET)}]});
-            // Step 4b: Enter raffle
-            setStatus('ticket','active','entering raffle...');
-            await window.ethereum.request({method:'eth_sendTransaction',params:[{from:userAddr,to:VAULT,data:encodeEnterRaffle('0x0000000000000000000000000000000000000000')}]});
-            setStatus('ticket','done','done');
+            for(var t = 0; t < ticketQty; t++){
+              setStatus('ticket','active','ticket '+(t+1)+'/'+ticketQty+' approving...');
+              await window.ethereum.request({method:'eth_sendTransaction',params:[{from:userAddr,to:TOKEN,data:encodeApprove(VAULT,TICKET)}]});
+              setStatus('ticket','active','ticket '+(t+1)+'/'+ticketQty+' entering...');
+              await window.ethereum.request({method:'eth_sendTransaction',params:[{from:userAddr,to:VAULT,data:encodeEnterRaffle('0x0000000000000000000000000000000000000000')}]});
+            }
+            setStatus('ticket','done', ticketQty + ' ticket' + (ticketQty > 1 ? 's' : '') + ' bought');
             currentStep = 'done';
             setButtonText('You\\'re In!');
             setButtonDisabled(true);
