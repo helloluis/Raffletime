@@ -265,7 +265,7 @@ export async function ensureAgentRegistered(): Promise<void> {
   }
 
   const bondAmount = config.bondAmount;
-  console.log("[lifecycle] Registering agent on-chain with bond:", formatEther(bondAmount));
+  console.log("[lifecycle] Registering agent on-chain with bond:", bondAmount.toString());
 
   // Approve bond tokens (may be a different token from the raffle payment token)
   const approveTx = await writeContract({
@@ -303,11 +303,11 @@ export async function createHouseRaffle(
   const balance = await getAgentBalance();
   if (balance < deposit) {
     throw new Error(
-      `Insufficient balance: have $${formatEther(balance)}, need $${formatEther(deposit)} for deposit`
+      `Insufficient balance: have $${(Number(balance) / 1e6).toFixed(2)}, need $${(Number(deposit) / 1e6).toFixed(2)} for deposit`
     );
   }
 
-  console.log("[lifecycle] Approving creation deposit:", formatEther(deposit));
+  console.log("[lifecycle] Approving creation deposit: $" + (Number(deposit) / 1e6).toFixed(2));
   const approveTx = await writeContract({
     address: config.contracts.paymentToken,
     abi: ERC20Abi,
