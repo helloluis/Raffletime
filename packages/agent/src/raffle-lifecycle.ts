@@ -10,11 +10,17 @@ import {
 import { config } from "./config.js";
 import * as db from "./db.js";
 
-/** Resolve an address to an agent name via on-chain AgentRegistry + cache in DB */
+/** Resolve an address to an agent name via on-chain AgentRegistry + cache in DB.
+ *  Refreshes on-chain data if DB entry is older than 4 hours. */
 async function resolveAgentName(address: Address): Promise<string | null> {
   // Check DB first
   const cached = await db.getAgent(address);
-  if (cached?.name) return cached.name;
+  if (cached?.name) {
+    const age = Date.now() - new Date(cached.updated_at).getTime();
+    const REFRESH_MS = 4 * 60 * 60 * 1000; // 4 hours
+    if (age < REFRESH_MS) return cached.name;
+    // Stale — fall through to refresh from chain
+  }
 
   // Look up on-chain
   try {
