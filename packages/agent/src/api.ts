@@ -7,7 +7,7 @@ import {
   getRaffleName,
   RaffleState,
 } from "./raffle-lifecycle.js";
-import { getCurrentVault } from "./scheduler.js";
+import { getCurrentVault, getServerPhase } from "./scheduler.js";
 import { publicClient, getAgentAddress, getWalletClient } from "./chain.js";
 import { AgentRegistryAbi, ERC20Abi, RaffleVaultAbi, RaffleRegistryAbi } from "./abis.js";
 import { config } from "./config.js";
@@ -534,9 +534,13 @@ export function createApi(): Hono {
             } catch {}
           }
 
+          const serverPhase = getServerPhase();
           const data = {
             vault,
             state: RaffleState[info.state],
+            phase: serverPhase.phase,
+            phaseChangedAt: serverPhase.changedAt,
+            phaseWinner: serverPhase.winner,
             pool: formatEther(info.totalPool),
             participants: info.participantCount.toString(),
             closesAt: Number(info.closesAt) * 1000,
@@ -730,6 +734,7 @@ export function createApi(): Hono {
     let initialClosesAt = Date.now() + 3600000;
     let initialState = "OPEN";
     let initialVault = "";
+    let initialPhase = "OPEN";
     try {
       let currentVault = (await import("./scheduler.js")).getCurrentVault();
       // In read-only mode, find active raffle from on-chain registry
@@ -746,6 +751,7 @@ export function createApi(): Hono {
         initialClosesAt = Number(info.closesAt) * 1000;
         initialState = RaffleState[info.state];
         initialVault = currentVault;
+        initialPhase = (await import("./scheduler.js")).getServerPhase().phase;
       }
     } catch {}
 
@@ -778,8 +784,10 @@ export function createApi(): Hono {
       var closesAt = ${initialClosesAt};
       var state = '${initialState}';
       var vault = '${initialVault}';
-      var phase = null; // null = countdown, 'DRAWING_', 'RESULT_', 'DISTRIB_', 'RESET_'
+      var phase = null;
       var phaseStart = 0;
+
+      var _initPhase = '${initialPhase}'; // applied after setPhase is defined
       var winners = [];
       var pendingVault = null;
 
@@ -789,6 +797,15 @@ export function createApi(): Hono {
         var d = JSON.parse(e.data);
         state = d.state;
         if(d.closesAt) closesAt = d.closesAt;
+
+        // Server-driven phase — always trust the server
+        if(d.phase && d.phase !== 'OPEN'){
+          var p = d.phase + '_';
+          if(d.phaseWinner) winners = [d.phaseWinner.address];
+          setPhase(p);
+        } else if(d.phase === 'OPEN' && phase){
+          // Server says OPEN (new raffle) but we're in a phase — let RESET_ finish
+        }
         if(d.pool) poolEl.textContent = '$' + parseFloat(d.pool).toFixed(2);
         if(d.participants) partEl.textContent = d.participants;
         if(d.winners && d.winners.length) winners = d.winners;
@@ -973,28 +990,17 @@ export function createApi(): Hono {
           }
         }
 
-        // Phase auto-advance based on elapsed time + server state
-        if(phase){
-          var elapsed = now - phaseStart;
-
-          // SUCCESS path
-          if(phase === 'DRAWING_'){
-            // Advance immediately if server already moved past drawing
-            if(state === 'INVALID') setPhase('INVALID_');
-            else if(state === 'PAYOUT' || state === 'SETTLED') setPhase('RESULT_');
-            // Or advance after 30s timeout (server may be slow)
-            else if(elapsed > 30000) setPhase('RESULT_');
-          }
-          if(phase === 'RESULT_' && elapsed > 30000) setPhase('DISTRIB_');
-          if(phase === 'DISTRIB_' && elapsed > 15000) setPhase('RESET_');
-
-          // INVALID path
-          if(phase === 'INVALID_' && elapsed > 10000) setPhase('REFUND_');
-          if(phase === 'REFUND_' && elapsed > 80000) setPhase('RESET_');
+        // Phase transitions are now server-driven via SSE.
+        // Only client-side fallback: if countdown hits zero and server hasn't sent DRAWING yet
+        if(!phase && state === 'OPEN'){
+          var d2 = closesAt - now;
+          if(d2 <= 0) setPhase('DRAWING_');
         }
 
         requestAnimationFrame(tick);
       }
+      // Apply initial phase if page loaded mid-draw
+      if(_initPhase !== 'OPEN') setPhase(_initPhase + '_');
       tick();
 
       // Listen for settled raffles and prepend to history table

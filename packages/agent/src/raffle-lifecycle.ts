@@ -9,6 +9,7 @@ import {
 } from "./abis.js";
 import { config } from "./config.js";
 import * as db from "./db.js";
+import { setServerPhase } from "./scheduler.js";
 
 /** Resolve an address to an agent name via on-chain AgentRegistry + cache in DB.
  *  Refreshes on-chain data if DB entry is older than 4 hours. */
@@ -492,14 +493,16 @@ export async function advanceRaffle(vault: Address): Promise<RaffleState> {
 
   switch (info.state) {
     case RaffleState.OPEN:
+      setServerPhase("OPEN");
       if (now >= info.closesAt) {
         await closeRaffle(vault);
+        setServerPhase("DRAWING");
         return RaffleState.CLOSED;
       }
       break;
 
     case RaffleState.CLOSED:
-      // Direct entry — no reveal phase needed. Request draw immediately.
+      setServerPhase("DRAWING");
       console.log(
         `[lifecycle] Raffle closed with ${info.participantCount} participants. Requesting draw...`
       );
@@ -562,6 +565,11 @@ export async function advanceRaffle(vault: Address): Promise<RaffleState> {
           const winnerName = await resolveAgentName(winners[0] as Address);
           await db.recordResult(vault, winners[0], winnerName, formatEther(info.totalPool));
           console.log(`[lifecycle] Winner: ${winnerName || winners[0].slice(0,10)} won $${formatEther(info.totalPool)}`);
+          setServerPhase("RESULT", { address: winners[0], name: winnerName, prize: formatEther(info.totalPool) });
+
+          // Auto-advance: RESULT → DISTRIB → RESET
+          setTimeout(() => setServerPhase("DISTRIB"), 30000);
+          setTimeout(() => setServerPhase("RESET"), 45000);
         }
         await db.upsertRaffle({ vault, state: "SETTLED", settledAt: new Date() });
       } catch (e) {
@@ -578,6 +586,9 @@ export async function advanceRaffle(vault: Address): Promise<RaffleState> {
       break;
 
     case RaffleState.INVALID:
+      setServerPhase("INVALID");
+      setTimeout(() => setServerPhase("REFUND"), 10000);
+      setTimeout(() => setServerPhase("RESET"), 90000);
       try { await db.upsertRaffle({ vault, state: "INVALID", settledAt: new Date() }); } catch {}
       // Auto-distribute refunds to all participants
       if (info.participantCount > 0n) {

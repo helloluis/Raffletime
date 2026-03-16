@@ -18,6 +18,25 @@ import {
 // Track the current house raffle
 let currentVault: Address | null = null;
 
+// Server-side phase tracking for the post-raffle timeline
+export type ServerPhase = "OPEN" | "DRAWING" | "RESULT" | "DISTRIB" | "RESET" | "INVALID" | "REFUND";
+let currentPhase: ServerPhase = "OPEN";
+let phaseChangedAt: number = Date.now();
+let lastWinner: { address: string; name: string | null; prize: string } | null = null;
+
+export function getServerPhase(): { phase: ServerPhase; changedAt: number; winner: typeof lastWinner } {
+  return { phase: currentPhase, changedAt: phaseChangedAt, winner: lastWinner };
+}
+
+export function setServerPhase(phase: ServerPhase, winner?: typeof lastWinner) {
+  if (phase !== currentPhase) {
+    currentPhase = phase;
+    phaseChangedAt = Date.now();
+    if (winner) lastWinner = winner;
+    console.log(`[scheduler] Phase → ${phase}`);
+  }
+}
+
 // Guard against overlapping ticks
 let tickInProgress = false;
 
@@ -121,6 +140,7 @@ export async function runSchedulerTick(
       createdAt: new Date().toISOString(),
     });
 
+    setServerPhase("OPEN");
     console.log("[scheduler] House raffle active:", currentVault);
   } catch (error) {
     console.error("[scheduler] Error:", error);
