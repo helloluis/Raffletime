@@ -1094,6 +1094,7 @@ export function createApi(): Hono {
     (function(){
       var TOKEN = '${config.contracts.paymentToken}';
       var AGENT_REG = '${config.contracts.agentRegistry}';
+      var VAULT = '${initialVault}';
       var BOND = '0x' + BigInt('${config.bondAmount}').toString(16);
       var TICKET = '0x' + BigInt('${config.raffle.ticketPrice}').toString(16);
       var CHAIN_ID = '0x' + (${config.chainId}).toString(16);
@@ -1224,10 +1225,10 @@ export function createApi(): Hono {
           } else if(currentStep === 'ticket'){
             // Step 4a: Approve ticket
             setStatus('ticket','active','approving...');
-            await window.ethereum.request({method:'eth_sendTransaction',params:[{from:userAddr,to:TOKEN,data:encodeApprove(vault,TICKET)}]});
+            await window.ethereum.request({method:'eth_sendTransaction',params:[{from:userAddr,to:TOKEN,data:encodeApprove(VAULT,TICKET)}]});
             // Step 4b: Enter raffle
             setStatus('ticket','active','entering raffle...');
-            await window.ethereum.request({method:'eth_sendTransaction',params:[{from:userAddr,to:vault,data:encodeEnterRaffle('0x0000000000000000000000000000000000000000')}]});
+            await window.ethereum.request({method:'eth_sendTransaction',params:[{from:userAddr,to:VAULT,data:encodeEnterRaffle('0x0000000000000000000000000000000000000000')}]});
             setStatus('ticket','done','done');
             currentStep = 'done';
             setButtonText('You\\'re In!');
