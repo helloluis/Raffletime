@@ -1359,14 +1359,24 @@ Content-Type: application/json
             </ol>
           </div>`;
       } else if (info.state === RaffleState.SETTLED) {
-        let drawTxHtml = "";
+        let drawDetailsHtml = "";
         try {
           const dbRaffle = await db.getRaffle(address);
           if (dbRaffle?.draw_tx) {
-            drawTxHtml = `<p style="margin-top:0.5rem">Draw tx: <a href="https://sepolia.celoscan.io/tx/${dbRaffle.draw_tx}" target="_blank" style="color:inherit;border-bottom:1px dashed #000">${dbRaffle.draw_tx.slice(0,10)}...${dbRaffle.draw_tx.slice(-8)}</a></p>`;
+            const isMock = !!process.env.MOCK_RANDOMNESS_ADDRESS;
+            const oracleName = isMock ? "MockRandomness (testnet)" : '<a href="https://docs.witnet.io/" target="_blank" style="color:inherit;border-bottom:1px dashed #000">Witnet Randomness Oracle</a>';
+            drawDetailsHtml = `
+            <table class="info-table" style="margin-top:0.75rem">
+              <tr><td>Oracle</td><td>${oracleName}</td></tr>
+              <tr><td>Draw Tx</td><td><a href="https://sepolia.celoscan.io/tx/${dbRaffle.draw_tx}" target="_blank" style="color:inherit;border-bottom:1px dashed #000">${dbRaffle.draw_tx.slice(0,10)}...${dbRaffle.draw_tx.slice(-8)}</a></td></tr>
+            </table>`;
           }
         } catch {}
-        actionHtml = `<div class="section"><h2>Results</h2><p>This raffle has been settled. Winners have been paid.</p>${drawTxHtml}</div>`;
+        const dbResult = await db.getResult(address).catch(() => null);
+        const winnerLine = dbResult?.winner
+          ? `<p style="margin-top:0.5rem"><strong>Winner:</strong> ${dbResult.winner_name ? houseIcon + '<strong>' + dbResult.winner_name + '</strong> ' : ''}${explorerLink(dbResult.winner, config.chainId)} — <strong>${formatCash(dbResult.prize)}</strong></p>`
+          : "";
+        actionHtml = `<div class="section"><h2>Results</h2><p>This raffle has been settled. Winners have been paid.</p>${winnerLine}${drawDetailsHtml}</div>`;
       } else {
         actionHtml = `<div class="section"><p>This raffle is currently in ${stateLabel(stateStr)} state.</p></div>`;
       }
@@ -1381,14 +1391,22 @@ Content-Type: application/json
     <h1>${displayName}</h1>
     <span class="type-badge ${meta?.type === "community" ? "community" : "house"}">${typeLabel}</span>
 
-    <table class="info-table" style="margin-top: 1.5rem">
+    ${await (async () => {
+      const dbRaffle = await db.getRaffle(address).catch(() => null);
+      const startedAt = dbRaffle?.created_at ? new Date(dbRaffle.created_at) : null;
+      const endedAt = dbRaffle?.settled_at ? new Date(dbRaffle.settled_at) : null;
+      const fmtDate = (d: Date) => `${String(d.getMonth()+1).padStart(2,'0')}/${String(d.getDate()).padStart(2,'0')} ${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}:${String(d.getSeconds()).padStart(2,'0')}`;
+      return `<table class="info-table" style="margin-top: 1.5rem">
       <tr><td>Status</td><td>${stateLabel(stateStr)}</td></tr>
       <tr><td>Pool</td><td>$${pool.toFixed(2)}</td></tr>
       <tr><td>Participants</td><td>${info.participantCount.toString()}</td></tr>
       <tr><td>Ticket Price</td><td>$${ticketPrice}</td></tr>
-      <tr><td>Time</td><td>${timeStr}</td></tr>
+      ${startedAt ? `<tr><td>Started</td><td>${fmtDate(startedAt)} UTC</td></tr>` : ''}
+      ${info.state === RaffleState.OPEN ? `<tr><td>Closes</td><td>${timeStr}</td></tr>` : ''}
+      ${endedAt ? `<tr><td>Ended</td><td>${fmtDate(endedAt)} UTC</td></tr>` : ''}
       <tr><td>Vault</td><td>${explorerLink(address, config.chainId)}</td></tr>
-    </table>
+    </table>`;
+    })()}
 
     ${info.state === RaffleState.OPEN ? `<p style="margin: 1.5rem 0"><a href="/raffles/${address}" class="cta">Join $${ticketPrice}</a></p>` : ""}
 
