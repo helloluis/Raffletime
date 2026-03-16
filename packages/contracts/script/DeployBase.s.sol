@@ -34,22 +34,22 @@ contract DeployBase is Script {
 
         vm.startBroadcast(deployerPrivateKey);
 
-        // 1. Payment tokens — USDC on Base Sepolia + MockERC20 for testing
+        // 1. Payment tokens — USDC + USDT on Base Sepolia
         address usdc = 0x036CbD53842c5426634e7929541eC2318f3dCF7e; // Circle USDC on Base Sepolia
+        address usdt = 0x8d9cb8f3191Fd685e2C14D2AC3Fb2b16D44EAfc3; // Tether USDT on Base Sepolia
 
-        // Also deploy a MockERC20 for testing without needing real USDC
+        // Also deploy a MockERC20 for agent registration bonds (avoids needing real stablecoins for testnet)
         MockERC20 mockToken = new MockERC20();
-        console.log("Deployed MockERC20:", address(mockToken));
+        console.log("Deployed MockERC20 (bond token):", address(mockToken));
         mockToken.mint(deployer, 10_000e18);
 
-        // Build accepted tokens list
-        // USDC = 6 decimals, MockERC20 = 18 decimals
+        // Build accepted tokens list: USDC + USDT (both 6 decimals)
         address[] memory tokens = new address[](2);
         uint8[] memory decimals = new uint8[](2);
         tokens[0] = usdc;
         decimals[0] = 6;
-        tokens[1] = address(mockToken);
-        decimals[1] = 18;
+        tokens[1] = usdt;
+        decimals[1] = 6;
 
         // 2. Deploy standalone contracts
         BeneficiaryRegistry beneficiaryRegistry = new BeneficiaryRegistry();
@@ -117,7 +117,8 @@ contract DeployBase is Script {
         console.log("REGISTRY_ADDRESS=%s", vm.toString(address(raffleRegistry)));
         console.log("AGENT_REGISTRY_ADDRESS=%s", vm.toString(address(agentRegistry)));
         console.log("PAYMENT_TOKEN_ADDRESS=%s", vm.toString(usdc));
-        console.log("MOCK_TOKEN_ADDRESS=%s", vm.toString(address(mockToken)));
+        console.log("USDT_ADDRESS=%s", vm.toString(usdt));
+        console.log("BOND_TOKEN_ADDRESS=%s", vm.toString(address(mockToken)));
         console.log("RANDOMNESS_ORACLE_ADDRESS=%s", vm.toString(address(mockRandomness)));
         console.log("==================================");
     }

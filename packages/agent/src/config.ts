@@ -13,6 +13,10 @@ export const config = {
     agentRegistry: (process.env.AGENT_REGISTRY_ADDRESS || "0x") as Address,
     paymentToken: (process.env.PAYMENT_TOKEN_ADDRESS ||
       "0x036CbD53842c5426634e7929541eC2318f3dCF7e") as Address, // USDC on Base Sepolia
+    // Token used for agent registration bond (may differ from raffle payment token on testnet)
+    bondToken: (process.env.BOND_TOKEN_ADDRESS ||
+      process.env.PAYMENT_TOKEN_ADDRESS ||
+      "0x036CbD53842c5426634e7929541eC2318f3dCF7e") as Address,
   },
 
   // House agent wallet

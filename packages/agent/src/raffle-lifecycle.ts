@@ -267,9 +267,9 @@ export async function ensureAgentRegistered(): Promise<void> {
   const bondAmount = config.bondAmount;
   console.log("[lifecycle] Registering agent on-chain with bond:", formatEther(bondAmount));
 
-  // Approve bond tokens
+  // Approve bond tokens (may be a different token from the raffle payment token)
   const approveTx = await writeContract({
-    address: config.contracts.paymentToken,
+    address: config.contracts.bondToken,
     abi: ERC20Abi,
     functionName: "approve",
     args: [config.contracts.agentRegistry, bondAmount],
