@@ -23,6 +23,99 @@ async function buildRafflesTableHtml(opts: { limit?: number; page?: number; show
   const PAGE_SIZE = opts.limit || 5;
   const page = opts.page || 1;
   try {
+    // Try DB first (fast)
+    let dbRaffles: any[] = [];
+    try {
+      if (opts.hoursBack) {
+        dbRaffles = await db.query(
+          "SELECT * FROM raffles WHERE created_at > now() - interval '1 hour' * $1 ORDER BY created_at DESC LIMIT $2",
+          [opts.hoursBack, PAGE_SIZE]
+        );
+      } else {
+        const offset = (page - 1) * PAGE_SIZE;
+        dbRaffles = await db.query(
+          "SELECT * FROM raffles ORDER BY created_at DESC LIMIT $1 OFFSET $2",
+          [PAGE_SIZE, offset]
+        );
+      }
+    } catch {}
+
+    if (dbRaffles.length > 0) {
+      // Serve from DB — no on-chain calls
+      const rows: string[] = [];
+      let totalPages = 1;
+
+      if (!opts.hoursBack) {
+        try {
+          const countResult = await db.query("SELECT count(*) FROM raffles");
+          totalPages = Math.max(1, Math.ceil(parseInt(countResult[0].count) / PAGE_SIZE));
+        } catch {}
+      }
+
+      for (const r of dbRaffles) {
+        const vault = r.vault;
+        const name = r.name || "House Raffle";
+        const state = r.state;
+        const pool = r.pool ? formatCash(r.pool) : "$0.00";
+        const participants = r.participants?.toString() || "0";
+
+        let statusHtml = "";
+        let winnerHtml = "—";
+
+        if (state === "OPEN") {
+          statusHtml = '<span style="color:#8b1a11;font-weight:600">ONGOING</span>';
+        } else if (state === "SETTLED") {
+          const dt = r.settled_at ? new Date(r.settled_at) : new Date(r.closes_at);
+          statusHtml = `${String(dt.getMonth()+1).padStart(2,'0')}/${String(dt.getDate()).padStart(2,'0')} ${String(dt.getHours()).padStart(2,'0')}:${String(dt.getMinutes()).padStart(2,'0')}`;
+          try {
+            const result = await db.getResult(vault);
+            if (result?.winner) {
+              const w = result.winner;
+              const wName = result.winner_name;
+              const short = `${w.slice(0,6)}...${w.slice(-4)}`;
+              winnerHtml = wName
+                ? `${houseIcon}<strong>${wName}</strong> <a href="https://sepolia.celoscan.io/address/${w}" target="_blank" style="color:inherit">${short}</a>`
+                : `<a href="https://sepolia.celoscan.io/address/${w}" target="_blank">${short}</a>`;
+            }
+          } catch {}
+        } else if (state === "INVALID") {
+          const dt = r.settled_at ? new Date(r.settled_at) : new Date(r.closes_at);
+          statusHtml = `${String(dt.getMonth()+1).padStart(2,'0')}/${String(dt.getDate()).padStart(2,'0')} ${String(dt.getHours()).padStart(2,'0')}:${String(dt.getMinutes()).padStart(2,'0')}`;
+          winnerHtml = "<em>Invalid</em>";
+        } else {
+          statusHtml = `<span style="color:#8b1a11">${state || "..."}</span>`;
+        }
+
+        const shortVault = `${vault.slice(0,6)}...${vault.slice(-4)}`;
+        const vaultLink = `<a href="https://sepolia.celoscan.io/address/${vault}" target="_blank">${shortVault}</a>`;
+        const nameLink = `<a href="/raffles/${vault}">${houseIcon}${name}</a>`;
+        const rowStyle = state === "INVALID" ? ' style="opacity:0.35"' : '';
+        rows.push(`<tr${rowStyle}><td>${nameLink}</td><td>${vaultLink}</td><td>${statusHtml}</td><td>${pool}</td><td>${participants}</td><td>${winnerHtml}</td></tr>`);
+      }
+
+      const tableHeader = `<tr><th>Name</th><th>Raffle</th><th>Status</th><th>Pool</th><th>Participants</th><th>Winner</th></tr>`;
+      let paginationHtml = "";
+      if (opts.showPagination && totalPages > 1) {
+        const links: string[] = [];
+        for (let p = 1; p <= totalPages; p++) {
+          links.push(p === page ? `<strong>${p}</strong>` : `<a href="/raffles/all?page=${p}">${p}</a>`);
+        }
+        paginationHtml = `<p style="margin-top:1rem">${links.join(" &middot; ")}</p>`;
+      } else if (!opts.hoursBack && dbRaffles.length >= PAGE_SIZE) {
+        paginationHtml = `<p style="margin-top:0.75rem"><a href="/raffles/all">View all raffles →</a></p>`;
+      }
+
+      return `<div class="section">
+        <h2>All Raffles</h2>
+        <table class="prev-table">
+          ${tableHeader}
+          ${rows.join("\n          ")}
+        </table>
+        ${paginationHtml}
+      </div>`;
+    }
+
+    // Fallback: read from on-chain registry
     const count = (await publicClient.readContract({
       address: config.contracts.registry,
       abi: RaffleRegistryAbi,
@@ -37,7 +130,6 @@ async function buildRafflesTableHtml(opts: { limit?: number; page?: number; show
     const totalRaffles = Number(count);
     const totalPages = Math.max(1, Math.ceil(totalRaffles / PAGE_SIZE));
 
-    // Calculate range for this page (newest first)
     const endIdx = totalRaffles - ((page - 1) * PAGE_SIZE) - 1;
     const startIdx = Math.max(0, endIdx - PAGE_SIZE + 1);
 
@@ -163,97 +255,63 @@ async function buildParticipantsHtml(vault: Address, info: { participantCount: b
   if (info.participantCount === 0n) return "";
 
   try {
-    const ParticipantsAbi = [
-      { name: "participants", type: "function", stateMutability: "view", inputs: [{ name: "", type: "uint256" }], outputs: [{ name: "", type: "address" }] },
-    ] as const;
-
-    const AgentLookupAbi = [
-      { name: "getAgentIdByAddress", type: "function", stateMutability: "view", inputs: [{ name: "agent", type: "address" }], outputs: [{ name: "", type: "uint256" }] },
-      { name: "tokenURI", type: "function", stateMutability: "view", inputs: [{ name: "agentId", type: "uint256" }], outputs: [{ name: "", type: "string" }] },
-    ] as const;
-
-    // Deduplicate — participants array may have repeats (multi-ticket)
-    const seen = new Map<string, number>();
-    const count = Number(info.participantCount);
-    for (let i = 0; i < count && i < 50; i++) {
-      try {
-        const addr = (await publicClient.readContract({
-          address: vault, abi: ParticipantsAbi, functionName: "participants", args: [BigInt(i)],
-        })) as string;
-        seen.set(addr.toLowerCase(), (seen.get(addr.toLowerCase()) || 0) + 1);
-      } catch { break; }
-    }
-
-    // Check winners
-    const winnerSet = new Set<string>();
-    if (info.state === 5) {
-      try {
-        const winners = (await publicClient.readContract({
-          address: vault, abi: RaffleVaultAbi, functionName: "getWinners",
-        })) as string[];
-        for (const w of winners) winnerSet.add(w.toLowerCase());
-      } catch {}
-    }
-
-    // Try DB first for all participant identities (fast path)
-    const agentNames = new Map<string, string>();
-    const housePlayerAddrs = new Set<string>();
-
-    // Check if we have DB entries for this raffle
+    // Check DB for entries first (fast path — no on-chain calls)
     let dbEntries: any[] = [];
     try {
       dbEntries = await db.getEntriesForRaffle(vault);
     } catch {}
 
+    const agentNames = new Map<string, string>();
+    const housePlayerAddrs = new Set<string>();
+    const seen = new Map<string, number>();
+
+    // Check winners from DB
+    const winnerSet = new Set<string>();
+    if (info.state === 5) {
+      try {
+        const result = await db.getResult(vault);
+        if (result?.winner) winnerSet.add(result.winner);
+      } catch {}
+      // Fallback to chain if DB empty
+      if (winnerSet.size === 0) {
+        try {
+          const winners = (await publicClient.readContract({
+            address: vault, abi: RaffleVaultAbi, functionName: "getWinners",
+          })) as string[];
+          for (const w of winners) winnerSet.add(w.toLowerCase());
+        } catch {}
+      }
+    }
+
     if (dbEntries.length > 0) {
-      // DB has entries — use them (fast, no RPC calls)
+      // DB has entries — use them entirely, no chain reads
       for (const entry of dbEntries) {
+        seen.set(entry.agent, entry.tickets);
         if (entry.name) agentNames.set(entry.agent, entry.name);
         if (entry.is_house) housePlayerAddrs.add(entry.agent);
       }
     } else {
-      // DB miss — look up on-chain and write back
+      // DB miss — fall back to on-chain (slow)
+      const ParticipantsAbi = [
+        { name: "participants", type: "function", stateMutability: "view", inputs: [{ name: "", type: "uint256" }], outputs: [{ name: "", type: "address" }] },
+      ] as const;
+
+      const count = Number(info.participantCount);
+      for (let i = 0; i < count && i < 50; i++) {
+        try {
+          const addr = (await publicClient.readContract({
+            address: vault, abi: ParticipantsAbi, functionName: "participants", args: [BigInt(i)],
+          })) as string;
+          seen.set(addr.toLowerCase(), (seen.get(addr.toLowerCase()) || 0) + 1);
+        } catch { break; }
+      }
+
+      // Resolve names from DB agent table
       for (const addr of seen.keys()) {
         try {
           const dbAgent = await db.getAgent(addr);
-          if (dbAgent) {
-            if (dbAgent.name) agentNames.set(addr, dbAgent.name);
-            if (dbAgent.is_house) housePlayerAddrs.add(addr);
-            continue;
-          }
-        } catch {}
-
-        try {
-          const agentId = (await publicClient.readContract({
-            address: config.contracts.agentRegistry,
-            abi: AgentLookupAbi,
-            functionName: "getAgentIdByAddress",
-            args: [addr as Address],
-          })) as bigint;
-
-          if (agentId > 0n) {
-            const uri = (await publicClient.readContract({
-              address: config.contracts.agentRegistry,
-              abi: AgentLookupAbi,
-              functionName: "tokenURI",
-              args: [agentId],
-            })) as string;
-
-            let name: string | null = null;
-            const nameMatch = uri.match(/\/agents\/([^/.]+)\.json/);
-            if (nameMatch) {
-              name = nameMatch[1].charAt(0).toUpperCase() + nameMatch[1].slice(1).replace(/-/g, ' ');
-              agentNames.set(addr, name);
-            }
-
-            const isHouse = uri.includes("raffletime.io");
-            if (isHouse) housePlayerAddrs.add(addr);
-
-            try {
-              await db.upsertAgent({ address: addr, agentId: Number(agentId), name, uri, isHouse, registered: true });
-              await db.recordEntry(vault, addr, seen.get(addr) || 1);
-            } catch {}
-          }
+          if (dbAgent?.name) agentNames.set(addr, dbAgent.name);
+          if (dbAgent?.is_house) housePlayerAddrs.add(addr);
         } catch {}
       }
     }
