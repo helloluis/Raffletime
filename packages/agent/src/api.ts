@@ -114,46 +114,30 @@ async function buildParticipantsHtml(vault: Address, info: { participantCount: b
   if (info.participantCount === 0n) return "";
 
   try {
-    // Read wallet registry to identify house players
-    let houseAddrs = new Set<string>();
-    try {
-      const { readFileSync, existsSync } = await import("fs");
-      const { resolve, dirname } = await import("path");
-      const { fileURLToPath } = await import("url");
-      const dir = dirname(fileURLToPath(import.meta.url));
-      const regPath = resolve(dir, "../data/test-wallets.json");
-      if (existsSync(regPath)) {
-        const reg = JSON.parse(readFileSync(regPath, "utf-8"));
-        for (const w of Object.values(reg) as any[]) {
-          houseAddrs.add(w.address.toLowerCase());
-        }
-      }
-    } catch {}
-
-    // Read participants by index
     const ParticipantsAbi = [
       { name: "participants", type: "function", stateMutability: "view", inputs: [{ name: "", type: "uint256" }], outputs: [{ name: "", type: "address" }] },
-      { name: "entryCount", type: "function", stateMutability: "view", inputs: [{ name: "", type: "address" }], outputs: [{ name: "", type: "uint256" }] },
+    ] as const;
+
+    const AgentLookupAbi = [
+      { name: "getAgentIdByAddress", type: "function", stateMutability: "view", inputs: [{ name: "agent", type: "address" }], outputs: [{ name: "", type: "uint256" }] },
+      { name: "tokenURI", type: "function", stateMutability: "view", inputs: [{ name: "agentId", type: "uint256" }], outputs: [{ name: "", type: "string" }] },
     ] as const;
 
     // Deduplicate — participants array may have repeats (multi-ticket)
-    const seen = new Map<string, number>(); // address -> ticket count
+    const seen = new Map<string, number>();
     const count = Number(info.participantCount);
     for (let i = 0; i < count && i < 50; i++) {
       try {
         const addr = (await publicClient.readContract({
-          address: vault,
-          abi: ParticipantsAbi,
-          functionName: "participants",
-          args: [BigInt(i)],
+          address: vault, abi: ParticipantsAbi, functionName: "participants", args: [BigInt(i)],
         })) as string;
         seen.set(addr.toLowerCase(), (seen.get(addr.toLowerCase()) || 0) + 1);
       } catch { break; }
     }
 
     // Check winners
-    let winnerSet = new Set<string>();
-    if (info.state === 5) { // SETTLED
+    const winnerSet = new Set<string>();
+    if (info.state === 5) {
       try {
         const winners = (await publicClient.readContract({
           address: vault, abi: RaffleVaultAbi, functionName: "getWinners",
@@ -162,22 +146,59 @@ async function buildParticipantsHtml(vault: Address, info: { participantCount: b
       } catch {}
     }
 
+    // Look up ERC-8004 agent names from on-chain registry
+    const agentNames = new Map<string, string>();
+    const housePlayerUris = new Set<string>(); // URIs containing "raffletime.io" are house players
+    for (const addr of seen.keys()) {
+      try {
+        const agentId = (await publicClient.readContract({
+          address: config.contracts.agentRegistry,
+          abi: AgentLookupAbi,
+          functionName: "getAgentIdByAddress",
+          args: [addr as Address],
+        })) as bigint;
+
+        if (agentId > 0n) {
+          const uri = (await publicClient.readContract({
+            address: config.contracts.agentRegistry,
+            abi: AgentLookupAbi,
+            functionName: "tokenURI",
+            args: [agentId],
+          })) as string;
+
+          // Extract name from URI path: .../agents/arabica.json -> Arabica
+          const nameMatch = uri.match(/\/agents\/([^/.]+)\.json/);
+          if (nameMatch) {
+            const name = nameMatch[1].charAt(0).toUpperCase() + nameMatch[1].slice(1).replace(/-/g, ' ');
+            agentNames.set(addr, name);
+          }
+
+          // House players have raffletime.io in their URI
+          if (uri.includes("raffletime.io")) {
+            housePlayerUris.add(addr);
+          }
+        }
+      } catch {}
+    }
+
     const rows = Array.from(seen.entries()).map(([addr, tickets]) => {
       const short = `${addr.slice(0, 6)}...${addr.slice(-4)}`;
       const link = `<a href="https://sepolia.celoscan.io/address/${addr}" target="_blank" style="color:inherit">${short}</a>`;
-      const isHouse = houseAddrs.has(addr);
+      const name = agentNames.get(addr);
+      const isHouse = housePlayerUris.has(addr);
       const isWinner = winnerSet.has(addr);
+      const nameHtml = name ? `<strong>${name}</strong> ${link}` : link;
       const badges = [
         isHouse ? '<span class="spec-pill" style="background:#555">House Player</span>' : '',
         isWinner ? '<span class="spec-pill" style="background:#8b1a11">Winner</span>' : '',
       ].filter(Boolean).join(' ');
-      return `<tr><td>${link}</td><td>${tickets}</td><td>${badges}</td></tr>`;
+      return `<tr><td>${nameHtml}</td><td>${tickets}</td><td>${badges}</td></tr>`;
     });
 
     return `<div class="section">
       <h2>Participants (${seen.size})</h2>
       <table class="prev-table">
-        <tr><th>Address</th><th>Tickets</th><th></th></tr>
+        <tr><th>Agent</th><th>Tickets</th><th></th></tr>
         ${rows.join("\n        ")}
       </table>
     </div>`;
