@@ -276,7 +276,7 @@ export function layout(title: string, body: string): string {
 
     /* ---- Dramatic timeline animations ---- */
 
-    body { transition: background-color 3s ease; }
+    /* transition set dynamically via JS per phase */
 
     .cta { transition: background 0.15s, border-color 0.15s, box-shadow 0.15s; }
 

@@ -511,6 +511,7 @@ export function createApi(): Hono {
           joinArea.innerHTML = '<a href="/raffles/'+vault+'" class="cta" id="join-btn">Join ${ticketPrice}</a>';
           joinArea.style.display = '';
           resultLine.style.display = 'none';
+          document.body.style.transition = 'background-color 2s ease';
           document.body.style.backgroundColor = '#908888';
         }
       });
@@ -542,11 +543,12 @@ export function createApi(): Hono {
         joinArea.style.display = 'none';
 
         // Background color transitions
-        timerEl.style.color = '';
-        if(p === 'DRAWING_' || p === 'RESULT_' || p === 'INVALID_'){
-          document.body.style.backgroundColor = '#8b1a11'; // stay red
-        } else if(p === 'DISTRIB_' || p === 'REFUND_'){
-          document.body.style.backgroundColor = '#CCBBBB'; // fade to light gray
+        timerEl.style.color = '#000';
+        document.body.style.transition = 'background-color 3s ease';
+        if(p === 'DRAWING_' || p === 'INVALID_'){
+          document.body.style.backgroundColor = '#CCBBBB'; // fade from red to light gray
+        } else if(p === 'RESULT_' || p === 'DISTRIB_' || p === 'REFUND_'){
+          document.body.style.backgroundColor = '#CCBBBB';
         } else if(p === 'RESET_'){
           document.body.style.backgroundColor = '#CCBBBB';
         }
@@ -607,18 +609,14 @@ export function createApi(): Hono {
             var ms = Math.floor(d%1000);
             timerEl.innerHTML = (m<10?'0':'')+m+':'+(s<10?'0':'')+s+'<span class="ms">'+(ms<100?'0':'')+(ms<10?'0':'')+ms+'</span>';
 
-            // Final minute: red timer, fade background to red, flash JOIN button
+            // Final minute: snap background to red in 1s, white timer, flash JOIN button
             if(d < 60000 && d > 0){
-              timerEl.style.color = '#8b1a11';
-              var pct = 1 - (d / 60000); // 0 to 1
-              var r = Math.round(144 + (139 * pct)); // 0x90 -> 0x8b*2
-              var g = Math.round(136 - (110 * pct)); // 0x88 -> 0x1a
-              var b = Math.round(136 - (119 * pct)); // 0x88 -> 0x11
-              document.body.style.backgroundColor = 'rgb('+r+','+g+','+b+')';
+              timerEl.style.color = '#fff';
+              document.body.style.transition = 'background-color 1s ease';
+              document.body.style.backgroundColor = '#8b1a11';
               if(joinBtn) joinBtn.classList.add('cta-urgent');
             } else {
               timerEl.style.color = '';
-              document.body.style.backgroundColor = '';
               if(joinBtn) joinBtn.classList.remove('cta-urgent');
             }
 
@@ -664,7 +662,7 @@ export function createApi(): Hono {
         <li><strong>Find a raffle:</strong> The house raffle runs every hour, all day long. <code>GET <a href="/api/raffles/current">/api/raffles/current</a></code></li>
         <li><strong>Enter via x402:</strong> <code>POST /api/raffles/{vault}/enter</code></li>
         <li><strong>Or enter directly:</strong> Approve payment token, then call <code>vault.enterRaffle()</code> on-chain.</li>
-        <li><strong>Wait for the draw:</strong> Watch the raffle numbers go up and wait to see if you're one of the lucky winners! Your prize is automatically distributed 3 minutes after the hour is up. Winner selection uses tamper-proof randomness from <a href="https://docs.witnet.io/" target="_blank">Witnet</a>.</li>
+        <li><strong>Wait for the draw:</strong> Monitor the raffle and see if you're one of the winners. Your prize is automatically distributed 3 minutes after the raffle closes. Winner selection uses tamper-proof randomness from <a href="https://docs.witnet.io/" target="_blank">Witnet</a>.</li>
       </ol>
       <p style="margin-top: 0.75rem">
         <a href="/.well-known/agent.json">Agent Discovery (ERC-8004)</a> &middot;
