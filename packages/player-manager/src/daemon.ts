@@ -119,7 +119,7 @@ async function tick(seedPassword: string): Promise<void> {
   }
 
   if (vault === lastEnteredVault) {
-    // Already entered this raffle, just log status
+    // Already planned entries for this raffle — check if it's time to enter the next player
     const remaining = new Date(raffle.closesAt).getTime() - Date.now();
     if (remaining > 0) {
       console.log(`[daemon] Waiting... ${vault.slice(0,10)}... pool=$${raffle.totalPool} participants=${raffle.participants} (${Math.floor(remaining/60000)}m left)`);
@@ -127,9 +127,10 @@ async function tick(seedPassword: string): Promise<void> {
     return;
   }
 
-  // 4. New raffle detected — enter with a random subset of players
+  // 4. New raffle detected — plan staggered entries
   console.log(`[daemon] New raffle detected: ${vault}`);
   lastVault = vault;
+  lastEnteredVault = vault;
 
   // Ensure we have enough players
   await ensureEnoughPlayers(seedPassword);
@@ -145,21 +146,57 @@ async function tick(seedPassword: string): Promise<void> {
   const shuffled = [...activePlayers].sort(() => Math.random() - 0.5);
   const selected = shuffled.slice(0, numToEnter);
 
-  console.log(`[daemon] Entering ${selected.length}/${activePlayers.length} players into ${vault.slice(0,10)}...`);
+  // Calculate stagger: spread entries over the raffle's lifetime minus last 3 minutes
+  const closesAt = new Date(raffle.closesAt).getTime();
+  const now = Date.now();
+  const totalWindow = closesAt - now - (3 * 60 * 1000); // stop 3 min before close
+  const intervalMs = totalWindow > 0 ? Math.floor(totalWindow / selected.length) : 10000;
 
-  try {
-    const { entered, skipped } = await enterRaffle(seedPassword, vault as Address, selected);
-    lastEnteredVault = vault;
+  console.log(`[daemon] Scheduling ${selected.length} players over ${Math.floor(totalWindow/60000)}m (${Math.floor(intervalMs/1000)}s apart)`);
 
-    const summary = `Raffle entry: **${entered.length}** players entered, **${skipped.length}** skipped. Pool: $${raffle.totalPool}`;
-    console.log(`[daemon] ${summary}`);
+  // Enter players one at a time with staggered delays
+  let enteredCount = 0;
+  let skippedCount = 0;
 
-    if (entered.length > 0) {
-      await sendAlert(summary);
+  for (let i = 0; i < selected.length; i++) {
+    const player = selected[i];
+
+    // Wait for the scheduled time (except first player enters immediately)
+    if (i > 0) {
+      // Add some jitter (±20%) to look more natural
+      const jitter = intervalMs * (0.8 + Math.random() * 0.4);
+      await new Promise((r) => setTimeout(r, jitter));
     }
-  } catch (e) {
-    console.error(`[daemon] Entry failed:`, e);
-    await sendAlert(`⚠️ Entry failed: ${String(e).slice(0, 100)}`);
+
+    // Verify raffle is still open before entering
+    try {
+      const check = await fetchJson<{ current: CurrentRaffle | null }>(`${APP_URL}/api/raffles/current`);
+      if (!check?.current || check.current.address !== vault || check.current.state !== "OPEN") {
+        console.log(`[daemon] Raffle no longer open, stopping entries`);
+        break;
+      }
+    } catch {}
+
+    try {
+      const { entered, skipped } = await enterRaffle(seedPassword, vault as Address, [player]);
+      if (entered.length > 0) {
+        enteredCount++;
+        console.log(`[daemon] ${entered[0]}`);
+      }
+      if (skipped.length > 0) {
+        skippedCount++;
+        console.log(`[daemon] Skip: ${skipped[0]}`);
+      }
+    } catch (e) {
+      console.log(`[daemon] ${player.name} failed: ${String(e).slice(0, 60)}`);
+      skippedCount++;
+    }
+  }
+
+  const summary = `Raffle entry complete: **${enteredCount}** entered, **${skippedCount}** skipped over ${Math.floor(totalWindow/60000)}m`;
+  console.log(`[daemon] ${summary}`);
+  if (enteredCount > 0) {
+    await sendAlert(summary);
   }
 }
 
