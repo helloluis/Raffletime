@@ -311,15 +311,17 @@ export function layout(title: string, body: string): string {
       text-transform: uppercase;
       letter-spacing: 0.08em;
       text-align: left;
-      padding: 0.5rem 0.5rem 0.5rem 0;
+      padding: 0.6rem 0.75rem;
       color: #555;
     }
     .prev-table td {
-      padding: 0.4rem 0.5rem 0.4rem 0;
+      padding: 0.55rem 0.75rem;
       vertical-align: top;
       font-family: 'Space Mono', monospace;
       font-size: 0.8rem;
     }
+    .prev-table th:nth-child(5),
+    .prev-table td:nth-child(5) { text-align: right; }
     .prev-table a { color: inherit; }
     .prev-table a:hover { color: #8b1a11; }
 

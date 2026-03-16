@@ -66,7 +66,7 @@ async function buildRafflesTableHtml(opts: { limit?: number; page?: number; show
           statusHtml = '<span style="color:#8b1a11;font-weight:600">ONGOING</span>';
         } else if (state === "SETTLED") {
           const dt = r.settled_at ? new Date(r.settled_at) : new Date(r.closes_at);
-          statusHtml = `${String(dt.getMonth()+1).padStart(2,'0')}/${String(dt.getDate()).padStart(2,'0')} ${String(dt.getHours()).padStart(2,'0')}:${String(dt.getMinutes()).padStart(2,'0')}`;
+          statusHtml = `&#10003; ${String(dt.getMonth()+1).padStart(2,'0')}/${String(dt.getDate()).padStart(2,'0')} ${String(dt.getHours()).padStart(2,'0')}:${String(dt.getMinutes()).padStart(2,'0')}`;
           try {
             const result = await db.getResult(vault);
             if (result?.winner) {
@@ -178,7 +178,7 @@ async function buildRafflesTableHtml(opts: { limit?: number; page?: number; show
           statusHtml = '<span style="color:#8b1a11;font-weight:600">ONGOING</span>';
           winnerHtml = "—";
         } else if (state === 5) {
-          statusHtml = dateStr;
+          statusHtml = `&#10003; ${dateStr}`;
           // Read winner — DB first, then on-chain fallback (separate try/catch)
           let foundWinner = false;
           try {
