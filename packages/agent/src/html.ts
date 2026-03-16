@@ -451,6 +451,9 @@ export function layout(title: string, body: string): string {
 </html>`;
 }
 
+/** Inline SVG house icon (12x12) */
+export const houseIcon = `<svg width="12" height="12" viewBox="0 0 12 12" fill="none" xmlns="http://www.w3.org/2000/svg" style="vertical-align:-1px;margin-right:3px"><path d="M6 1L1 5.5V11H4.5V7.5H7.5V11H11V5.5L6 1Z" fill="currentColor"/></svg>`;
+
 /** Get block explorer URL for an address */
 export function explorerLink(address: string, chainId: number): string {
   const explorers: Record<number, string> = {

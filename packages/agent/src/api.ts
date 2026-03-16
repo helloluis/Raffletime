@@ -13,7 +13,7 @@ import { AgentRegistryAbi, ERC20Abi, RaffleVaultAbi, RaffleRegistryAbi } from ".
 import { config } from "./config.js";
 import { createX402Middleware } from "./x402.js";
 import { getRaffleMeta, getAllRaffleMeta, type RaffleMeta } from "./raffle-store.js";
-import { layout, stateLabel, formatCash, explorerLink } from "./html.js";
+import { layout, stateLabel, formatCash, explorerLink, houseIcon } from "./html.js";
 import { serveStatic } from "@hono/node-server/serve-static";
 import { buildAgentCard } from "./agent-cards.js";
 import * as db from "./db.js";
@@ -89,7 +89,7 @@ async function buildPrevRafflesHtml(): Promise<string> {
 
         const shortVault = `${vault.slice(0,6)}...${vault.slice(-4)}`;
         const vaultLink = `<a href="https://sepolia.celoscan.io/address/${vault}" target="_blank">${shortVault}</a>`;
-        const nameLink = `<a href="/raffles/${vault}">${name || "House Raffle"}</a>`;
+        const nameLink = `<a href="/raffles/${vault}">${houseIcon}${name || "House Raffle"}</a>`;
 
         const rowStyle = state === 6 ? ' style="opacity:0.35"' : '';
         rows.push(`<tr${rowStyle}><td>${nameLink}</td><td>${vaultLink}</td><td>${statusHtml}</td><td>${pool}</td><td>${participants}</td><td>${winnerHtml}</td></tr>`);
@@ -215,11 +215,9 @@ async function buildParticipantsHtml(vault: Address, info: { participantCount: b
       const name = agentNames.get(addr);
       const isHouse = housePlayerAddrs.has(addr);
       const isWinner = winnerSet.has(addr);
-      const nameHtml = name ? `<strong>${name}</strong> ${link}` : link;
-      const badges = [
-        isHouse ? '<span class="spec-pill" style="background:#555">House Player</span>' : '',
-        isWinner ? '<span class="spec-pill" style="background:#8b1a11">Winner</span>' : '',
-      ].filter(Boolean).join(' ');
+      const housePrefix = isHouse ? houseIcon : '';
+      const nameHtml = name ? `${housePrefix}<strong>${name}</strong> ${link}` : `${housePrefix}${link}`;
+      const badges = isWinner ? '<span class="spec-pill" style="background:#8b1a11">Winner</span>' : '';
       return `<tr><td>${nameHtml}</td><td>${tickets}</td><td>${badges}</td></tr>`;
     });
 
@@ -860,7 +858,8 @@ export function createApi(): Hono {
         var tr = document.createElement('tr');
         tr.className = 'row-flash';
         if(d.state === 'INVALID') tr.style.opacity = '0.35';
-        var nameText = d.name || 'House Raffle';
+        var hIcon = '<svg width="12" height="12" viewBox="0 0 12 12" fill="none" xmlns="http://www.w3.org/2000/svg" style="vertical-align:-1px;margin-right:3px"><path d="M6 1L1 5.5V11H4.5V7.5H7.5V11H11V5.5L6 1Z" fill="currentColor"/></svg>';
+        var nameText = hIcon + (d.name || 'House Raffle');
         tr.innerHTML = '<td><a href="/raffles/'+d.vault+'">'+nameText+'</a></td>'
           + '<td><a href="https://sepolia.celoscan.io/address/'+d.vault+'" target="_blank">'+shortVault+'</a></td>'
           + '<td>'+d.ended+'</td>'
