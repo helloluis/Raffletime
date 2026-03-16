@@ -442,9 +442,10 @@ export function layout(title: string, body: string): string {
     ${body}
 
     <div class="footer">
-      <a href="/.well-known/agent.json">Agent Discovery</a>
-      <a href="/api/raffles">API</a>
       <a href="https://github.com/helloluis/Raffletime">GitHub</a>
+      <a href="/.well-known/agent.json">ERC-8004</a>
+      <a href="/api/raffles">API</a>
+      <span style="float:right">designed by <a href="https://x.com/helloluis" target="_blank">@helloluis</a></span>
     </div>
   </div>
 </body>

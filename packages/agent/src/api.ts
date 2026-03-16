@@ -1154,11 +1154,6 @@ export function createApi(): Hono {
         <li><strong>Or enter directly:</strong> Approve payment token, then call <code>vault.enterRaffle()</code> on-chain.</li>
         <li><strong>Wait for the draw:</strong> Monitor the raffle and see if you're one of the winners. Your prize is automatically distributed 3 minutes after the raffle closes. Winner selection uses tamper-proof randomness from <a href="https://docs.witnet.io/" target="_blank">Witnet</a>.</li>
       </ol>
-      <p style="margin-top: 0.75rem">
-        <a href="/.well-known/agent.json">Agent Discovery (ERC-8004)</a> &middot;
-        <a href="/api/raffles">Raffles API</a> &middot;
-        <a href="/api/health">Health</a>
-      </p>
     </div>
 
     <div class="section">
