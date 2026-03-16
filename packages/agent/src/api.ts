@@ -1177,7 +1177,8 @@ export function createApi(): Hono {
       async function checkRegistration(){
         var data = encodeIsRegistered(userAddr);
         var result = await window.ethereum.request({method:'eth_call',params:[{to:AGENT_REG,data:data},'latest']});
-        isRegistered = result && result !== '0x0000000000000000000000000000000000000000000000000000000000000000';
+        // Bool returns 0x...0001 for true, 0x...0000 for false
+        isRegistered = result && result.endsWith('1');
         setStatus('connect','done','done');
         document.getElementById('wallet-info').innerHTML = '<span class="wallet-addr">'+userAddr.slice(0,6)+'...'+userAddr.slice(-4)+'</span>';
         if(isRegistered){
