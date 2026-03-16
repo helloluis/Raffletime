@@ -16,7 +16,7 @@ import { getRaffleMeta, getAllRaffleMeta, type RaffleMeta } from "./raffle-store
 import { layout, stateLabel, formatCash, explorerLink } from "./html.js";
 import { serveStatic } from "@hono/node-server/serve-static";
 
-/** Build HTML table of previous (settled/invalid) raffles */
+/** Build HTML table of all raffles (active + settled + invalid) */
 async function buildPrevRafflesHtml(): Promise<string> {
   try {
     const count = (await publicClient.readContract({
@@ -25,9 +25,11 @@ async function buildPrevRafflesHtml(): Promise<string> {
       functionName: "getRaffleCount",
     })) as bigint;
 
-    if (count === 0n) return "";
-
     const rows: string[] = [];
+    const stateNames: Record<number, string> = {
+      0: "INIT", 1: "OPEN", 2: "CLOSED", 3: "DRAWING", 4: "PAYOUT", 5: "SETTLED", 6: "INVALID",
+    };
+
     // Scan last 20 raffles max, newest first
     const start = count > 20n ? count - 20n : 0n;
     for (let i = count - 1n; i >= start; i--) {
@@ -40,58 +42,64 @@ async function buildPrevRafflesHtml(): Promise<string> {
         })) as any;
 
         const vault = (entry.vault || entry[0]) as Address;
+        const name = (entry.name || entry[2]) as string;
         const state = (await publicClient.readContract({
           address: vault,
           abi: RaffleVaultAbi,
           functionName: "state",
         })) as number;
 
-        // Only show settled or invalid
-        if (state !== 5 && state !== 6) continue;
-
         const closesAt = Number(entry.closesAt || entry[4]);
         const dt = new Date(closesAt * 1000);
         const dateStr = `${String(dt.getMonth()+1).padStart(2,'0')}/${String(dt.getDate()).padStart(2,'0')} ${String(dt.getHours()).padStart(2,'0')}:${String(dt.getMinutes()).padStart(2,'0')}`;
 
-        let pool = "0";
+        let pool = "$0.00";
         let participants = "0";
         let winnerHtml = "—";
+        let statusHtml = "";
         try {
           const tp = (await publicClient.readContract({ address: vault, abi: RaffleVaultAbi, functionName: "totalPool" })) as bigint;
           pool = formatCash(formatEther(tp));
           const pc = (await publicClient.readContract({ address: vault, abi: RaffleVaultAbi, functionName: "getParticipantCount" })) as bigint;
           participants = pc.toString();
-          if (state === 5) {
+        } catch {}
+
+        if (state === 1) {
+          // OPEN — ongoing
+          statusHtml = '<span style="color:#8b1a11;font-weight:600">ONGOING</span>';
+          winnerHtml = "—";
+        } else if (state === 5) {
+          statusHtml = dateStr;
+          try {
             const winners = (await publicClient.readContract({ address: vault, abi: RaffleVaultAbi, functionName: "getWinners" })) as string[];
             if (winners.length > 0) {
               const w = winners[0];
               winnerHtml = `<a href="https://sepolia.celoscan.io/address/${w}" target="_blank">${w.slice(0,6)}...${w.slice(-4)}</a>`;
             }
-          } else {
-            winnerHtml = "<em>Invalid</em>";
-          }
-        } catch {}
+          } catch {}
+        } else if (state === 6) {
+          statusHtml = dateStr;
+          winnerHtml = "<em>Invalid</em>";
+        } else {
+          // CLOSED, DRAWING, PAYOUT — in progress
+          statusHtml = `<span style="color:#8b1a11">${stateNames[state] || "..."}</span>`;
+        }
 
         const shortVault = `${vault.slice(0,6)}...${vault.slice(-4)}`;
         const vaultLink = `<a href="https://sepolia.celoscan.io/address/${vault}" target="_blank">${shortVault}</a>`;
+        const nameLink = `<a href="/raffles/${vault}">${name || "House Raffle"}</a>`;
 
         const rowStyle = state === 6 ? ' style="opacity:0.35"' : '';
-        rows.push(`<tr${rowStyle}><td>${vaultLink}</td><td>${dateStr}</td><td>${pool}</td><td>${participants}</td><td>${winnerHtml}</td></tr>`);
+        rows.push(`<tr${rowStyle}><td>${nameLink}</td><td>${vaultLink}</td><td>${statusHtml}</td><td>${pool}</td><td>${participants}</td><td>${winnerHtml}</td></tr>`);
       } catch { continue; }
     }
 
-    // Always render the section (even empty) so SSE can append rows live
-    if (rows.length === 0) return `<div class="section">
-      <h2>Previous Raffles</h2>
-      <table class="prev-table">
-        <tr><th>Raffle</th><th>Ended</th><th>Pool</th><th>Participants</th><th>Winner</th></tr>
-      </table>
-    </div>`;
+    const tableHeader = `<tr><th>Name</th><th>Raffle</th><th>Status</th><th>Pool</th><th>Participants</th><th>Winner</th></tr>`;
 
     return `<div class="section">
-      <h2>Previous Raffles</h2>
+      <h2>All Raffles</h2>
       <table class="prev-table">
-        <tr><th>Raffle</th><th>Ended</th><th>Pool</th><th>Participants</th><th>Winner</th></tr>
+        ${tableHeader}
         ${rows.join("\n        ")}
       </table>
     </div>`;
@@ -306,6 +314,7 @@ export function createApi(): Hono {
               participants: info.participantCount.toString(),
               state: RaffleState[info.state],
               winners,
+              name: data.name,
             };
             await stream.writeSSE({ data: JSON.stringify(settled), event: "settled" });
           }
@@ -699,7 +708,9 @@ export function createApi(): Hono {
         var tr = document.createElement('tr');
         tr.className = 'row-flash';
         if(d.state === 'INVALID') tr.style.opacity = '0.35';
-        tr.innerHTML = '<td><a href="https://sepolia.celoscan.io/address/'+d.vault+'" target="_blank">'+shortVault+'</a></td>'
+        var nameText = d.name || 'House Raffle';
+        tr.innerHTML = '<td><a href="/raffles/'+d.vault+'">'+nameText+'</a></td>'
+          + '<td><a href="https://sepolia.celoscan.io/address/'+d.vault+'" target="_blank">'+shortVault+'</a></td>'
           + '<td>'+d.ended+'</td>'
           + '<td>'+d.pool+'</td>'
           + '<td>'+d.participants+'</td>'
