@@ -32,7 +32,8 @@ contract AgentRegistry is ERC721, Ownable {
     uint256 public constant MIN_REGISTRATION_AGE = 7 days;
 
     /// @notice Minimum admission bond required to register (sybil resistance)
-    uint256 public constant MIN_BOND = 1e18; // $1
+    /// Set in constructor based on staking token decimals ($1)
+    uint256 public immutable MIN_BOND;
 
     /// @notice Cooldown period before a bond withdrawal is finalized
     uint256 public constant BOND_COOLDOWN = 14 days;
@@ -87,8 +88,9 @@ contract AgentRegistry is ERC721, Ownable {
         _;
     }
 
-    constructor(address stakeToken_) ERC721("RaffleTime Agent", "RTA") Ownable(msg.sender) {
+    constructor(address stakeToken_, uint256 minBond_) ERC721("RaffleTime Agent", "RTA") Ownable(msg.sender) {
         stakeToken = IERC20(stakeToken_);
+        MIN_BOND = minBond_;
     }
 
     /// @notice Authorize a factory to create and authorize vaults

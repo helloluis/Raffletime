@@ -14,8 +14,8 @@ import "../src/mocks/MockERC20.sol";
 
 /// @title DeployTestnet
 /// @notice Deploys the full RaffleTime protocol to Celo Sepolia testnet.
-///         Deploys a MockERC20 as the payment token (testnet has no faucet for cUSD).
-///         Uses MockWitnetRandomness for VRF (real Witnet at 0xC0FFEE98AD1434aCbDB894BbB752e138c1006fAB on mainnet).
+///         Supports multiple payment tokens (USDC, cUSD, mock tokens).
+///         Uses MockRandomness for VRF (real Witnet at 0xC0FFEE98AD1434aCbDB894BbB752e138c1006fAB on mainnet).
 ///
 /// Usage:
 ///   forge script script/DeployAlfajores.s.sol:DeployTestnet \
@@ -23,10 +23,7 @@ import "../src/mocks/MockERC20.sol";
 ///     --broadcast -vvvv
 ///
 /// Required env vars:
-///   PRIVATE_KEY           — deployer wallet (also becomes protocol fee recipient)
-///
-/// Optional env vars:
-///   PAYMENT_TOKEN_ADDRESS — use an existing ERC-20 instead of deploying MockERC20
+///   PRIVATE_KEY — deployer wallet (also becomes protocol fee recipient)
 contract DeployTestnet is Script {
     function run() external {
         uint256 deployerPrivateKey = vm.envUint("PRIVATE_KEY");
@@ -36,27 +33,29 @@ contract DeployTestnet is Script {
 
         vm.startBroadcast(deployerPrivateKey);
 
-        // 1. Payment token — deploy MockERC20 unless an existing address is provided
-        address paymentToken;
-        address envToken = vm.envOr("PAYMENT_TOKEN_ADDRESS", address(0));
-        if (envToken != address(0)) {
-            paymentToken = envToken;
-            console.log("Using existing payment token:", paymentToken);
-        } else {
-            MockERC20 mockToken = new MockERC20();
-            paymentToken = address(mockToken);
-            console.log("Deployed MockERC20:", paymentToken);
+        // 1. Payment tokens — USDC on Celo Sepolia + optional MockERC20
+        address usdc = 0x01C5C0122039549AD1493B8220cABEdD739BC44E; // Circle USDC on Celo Sepolia
 
-            // Mint 10,000 test tokens to deployer
-            mockToken.mint(deployer, 10_000e18);
-            console.log("Minted 10,000 tokens to deployer");
-        }
+        // Also deploy a MockERC20 for testing
+        MockERC20 mockToken = new MockERC20();
+        console.log("Deployed MockERC20:", address(mockToken));
+        mockToken.mint(deployer, 10_000e18);
+
+        // Build accepted tokens list
+        // USDC = 6 decimals, MockERC20 = 18 decimals
+        address[] memory tokens = new address[](2);
+        uint8[] memory decimals = new uint8[](2);
+        tokens[0] = usdc;
+        decimals[0] = 6;
+        tokens[1] = address(mockToken);
+        decimals[1] = 18;
 
         // 2. Deploy standalone contracts
         BeneficiaryRegistry beneficiaryRegistry = new BeneficiaryRegistry();
         console.log("BeneficiaryRegistry:", address(beneficiaryRegistry));
 
-        AgentRegistry agentRegistry = new AgentRegistry(paymentToken);
+        // AgentRegistry uses USDC for staking, $1 bond = 1e6
+        AgentRegistry agentRegistry = new AgentRegistry(usdc, 1e6);
         console.log("AgentRegistry:", address(agentRegistry));
 
         TicketNFT ticketNFT = new TicketNFT();
@@ -68,25 +67,26 @@ contract DeployTestnet is Script {
         RaffleRegistry raffleRegistry = new RaffleRegistry();
         console.log("RaffleRegistry:", address(raffleRegistry));
 
-        // 3. Deploy mock VRF (use real Witnet address 0xC0FFEE98AD1434aCbDB894BbB752e138c1006fAB on mainnet)
+        // 3. Deploy mock VRF
         MockRandomness mockRandomness = new MockRandomness();
         console.log("MockRandomness:", address(mockRandomness));
 
-        // 4. Deploy vault implementation (clone target, never used directly)
+        // 4. Deploy vault implementation
         RaffleVault vaultImpl = new RaffleVault();
         console.log("RaffleVault (impl):", address(vaultImpl));
 
-        // 5. Deploy factory
+        // 5. Deploy factory with multi-token support
         RaffleFactory factory = new RaffleFactory(
             address(vaultImpl),
-            paymentToken,
+            tokens,
+            decimals,
             address(ticketNFT),
             address(receiptSBT),
             address(agentRegistry),
             address(beneficiaryRegistry),
             address(raffleRegistry),
             address(mockRandomness),
-            deployer // protocol fee recipient = deployer for now
+            deployer
         );
         console.log("RaffleFactory:", address(factory));
 
@@ -96,7 +96,7 @@ contract DeployTestnet is Script {
         ticketNFT.transferOwnership(address(factory));
         receiptSBT.transferOwnership(address(factory));
 
-        // 7. Register deployer as a test beneficiary
+        // 7. Register deployer as test beneficiary
         beneficiaryRegistry.registerBeneficiary(
             deployer,
             "Test Charity",
@@ -107,12 +107,13 @@ contract DeployTestnet is Script {
 
         vm.stopBroadcast();
 
-        // Print summary for .env
+        // Print summary
         console.log("\n========== Copy to .env ==========");
         console.log("FACTORY_ADDRESS=%s", vm.toString(address(factory)));
         console.log("REGISTRY_ADDRESS=%s", vm.toString(address(raffleRegistry)));
         console.log("AGENT_REGISTRY_ADDRESS=%s", vm.toString(address(agentRegistry)));
-        console.log("PAYMENT_TOKEN_ADDRESS=%s", vm.toString(paymentToken));
+        console.log("USDC_ADDRESS=%s", vm.toString(usdc));
+        console.log("MOCK_TOKEN_ADDRESS=%s", vm.toString(address(mockToken)));
         console.log("BENEFICIARY_REGISTRY_ADDRESS=%s", vm.toString(address(beneficiaryRegistry)));
         console.log("RANDOMNESS_ORACLE_ADDRESS=%s", vm.toString(address(mockRandomness)));
         console.log("BENEFICIARIES=%s", vm.toString(deployer));

@@ -43,10 +43,10 @@ contract RaffleFactory is Ownable {
 
     // ============ Deposit calculation constants ============
 
-    /// @notice Deposit amounts in USD cents (decimals-agnostic)
-    uint256 public constant MIN_DEPOSIT_CENTS = 10; // $0.10
-    uint256 public constant BASE_DEPOSIT_CENTS = 100; // $1.00
-    uint256 public constant REFERENCE_SIZE_CENTS = 10000; // $100
+    /// @notice Deposit amounts in 6-decimal USD
+    uint256 public constant MIN_DEPOSIT_USD6 = 100000; // $0.10
+    uint256 public constant BASE_DEPOSIT_USD6 = 1000000; // $1.00
+    uint256 public constant REFERENCE_SIZE_USD6 = 100000000; // $100
 
     // ============ Refund tier constants (basis points) ============
 
@@ -215,24 +215,24 @@ contract RaffleFactory is Ownable {
     /// @notice Calculate the required deposit for creating a raffle.
     ///         Uses the same sqrt scaling as agent staking.
     ///         deposit = max(MIN_DEPOSIT, BASE_DEPOSIT × sqrt(targetPoolSize / REFERENCE_SIZE))
-    /// @param targetPoolSizeCents The ARO-configured expected pool size in USD cents
+    /// @param targetPoolSizeUsd6 The ARO-configured expected pool size in USD cents
     /// @return The required deposit amount
     /// @notice Calculate required ARO deposit in USD cents based on target pool size (also in cents).
-    function calculateDepositCents(uint256 targetPoolSizeCents) public pure returns (uint256) {
-        if (targetPoolSizeCents == 0) return MIN_DEPOSIT_CENTS;
+    function calculateDepositUsd6(uint256 targetPoolSizeUsd6) public pure returns (uint256) {
+        if (targetPoolSizeUsd6 == 0) return MIN_DEPOSIT_USD6;
 
-        uint256 scaled = (targetPoolSizeCents * 1e18) / REFERENCE_SIZE_CENTS;
+        uint256 scaled = (targetPoolSizeUsd6 * 1e18) / REFERENCE_SIZE_USD6;
         uint256 sqrtScaled = Math.sqrt(scaled);
-        uint256 depositCents = (BASE_DEPOSIT_CENTS * sqrtScaled) / 1e9;
+        uint256 depositUsd6 = (BASE_DEPOSIT_USD6 * sqrtScaled) / 1e9;
 
-        return depositCents > MIN_DEPOSIT_CENTS ? depositCents : MIN_DEPOSIT_CENTS;
+        return depositUsd6 > MIN_DEPOSIT_USD6 ? depositUsd6 : MIN_DEPOSIT_USD6;
     }
 
     /// @notice Calculate deposit in the deposit token's actual units (accounting for decimals)
-    function calculateDeposit(uint256 targetPoolSizeCents) public view returns (uint256) {
-        uint256 cents = calculateDepositCents(targetPoolSizeCents);
+    function calculateDeposit(uint256 targetPoolSizeUsd6) public view returns (uint256) {
+        uint256 usd6 = calculateDepositUsd6(targetPoolSizeUsd6);
         uint8 dec = tokenDecimals[acceptedTokens[0]];
-        return (cents * (10 ** uint256(dec))) / 100;
+        return (usd6 * (10 ** uint256(dec))) / 1e6;
     }
 
     // ============ Admin functions ============

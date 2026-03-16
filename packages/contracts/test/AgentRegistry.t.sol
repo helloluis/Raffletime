@@ -14,7 +14,7 @@ contract AgentRegistryTest is Test {
 
     function setUp() public {
         cUSD = new MockERC20();
-        registry = new AgentRegistry(address(cUSD));
+        registry = new AgentRegistry(address(cUSD), 1e18); // MockERC20 has 18 decimals
 
         // Fund agents for bond
         cUSD.mint(agent1, 100e18);
