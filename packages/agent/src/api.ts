@@ -792,7 +792,14 @@ export function createApi(): Hono {
       var pendingVault = null;
 
       // SSE: live updates from server
-      var es = new EventSource('/api/raffles/live');
+      // SSE with auto-reconnect
+      var es;
+      function connectSSE(){
+        es = new EventSource('/api/raffles/live');
+        es.onerror = function(){ setTimeout(connectSSE, 3000); };
+        attachSSEListeners();
+      }
+      function attachSSEListeners(){
       es.addEventListener('raffle', function(e){
         var d = JSON.parse(e.data);
         state = d.state;
@@ -1034,12 +1041,16 @@ export function createApi(): Hono {
 
         // Insert after the header row
         var headerRow = table.querySelector('tr');
-        if(headerRow && headerRow.nextSibling){
-          table.insertBefore(tr, headerRow.nextSibling);
-        } else {
-          table.appendChild(tr);
+        if(headerRow && headerRow.parentNode){
+          if(headerRow.nextSibling){
+            headerRow.parentNode.insertBefore(tr, headerRow.nextSibling);
+          } else {
+            headerRow.parentNode.appendChild(tr);
+          }
         }
       });
+      } // end attachSSEListeners
+      connectSSE();
     })();
     </script>
 
