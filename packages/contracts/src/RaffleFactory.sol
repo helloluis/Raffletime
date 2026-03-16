@@ -28,7 +28,9 @@ contract RaffleFactory is Ownable {
     address public vaultImplementation;
 
     /// @notice Protocol contracts
-    IERC20 public paymentToken;
+    address[] public acceptedTokens;
+    mapping(address => uint8) public tokenDecimals;
+    IERC20 public depositToken; // token used for ARO deposits (first accepted token)
     TicketNFT public ticketNFT;
     ReceiptSBT public receiptSBT;
     AgentRegistry public agentRegistry;
@@ -41,14 +43,10 @@ contract RaffleFactory is Ownable {
 
     // ============ Deposit calculation constants ============
 
-    /// @notice Minimum deposit regardless of raffle size
-    uint256 public constant MIN_DEPOSIT = 0.10e18; // $0.10
-
-    /// @notice Base deposit at reference pool size ($100)
-    uint256 public constant BASE_DEPOSIT = 1e18; // $1.00
-
-    /// @notice Reference pool size for sqrt formula (same as AgentRegistry)
-    uint256 public constant REFERENCE_SIZE = 100e18; // $100
+    /// @notice Deposit amounts in USD cents (decimals-agnostic)
+    uint256 public constant MIN_DEPOSIT_CENTS = 10; // $0.10
+    uint256 public constant BASE_DEPOSIT_CENTS = 100; // $1.00
+    uint256 public constant REFERENCE_SIZE_CENTS = 10000; // $100
 
     // ============ Refund tier constants (basis points) ============
 
@@ -75,7 +73,8 @@ contract RaffleFactory is Ownable {
 
     constructor(
         address vaultImplementation_,
-        address paymentToken_,
+        address[] memory acceptedTokens_,
+        uint8[] memory tokenDecimals_,
         address ticketNFT_,
         address receiptSBT_,
         address agentRegistry_,
@@ -84,8 +83,14 @@ contract RaffleFactory is Ownable {
         address anyrand_,
         address protocolFeeRecipient_
     ) Ownable(msg.sender) {
+        require(acceptedTokens_.length > 0, "Need at least 1 token");
+        require(acceptedTokens_.length == tokenDecimals_.length, "Token/decimals mismatch");
         vaultImplementation = vaultImplementation_;
-        paymentToken = IERC20(paymentToken_);
+        for (uint256 i = 0; i < acceptedTokens_.length; i++) {
+            acceptedTokens.push(acceptedTokens_[i]);
+            tokenDecimals[acceptedTokens_[i]] = tokenDecimals_[i];
+        }
+        depositToken = IERC20(acceptedTokens_[0]); // deposits in first token
         ticketNFT = TicketNFT(ticketNFT_);
         receiptSBT = ReceiptSBT(receiptSBT_);
         agentRegistry = AgentRegistry(agentRegistry_);
@@ -102,9 +107,15 @@ contract RaffleFactory is Ownable {
         // Require agent registration
         require(agentRegistry.isRegistered(msg.sender), "Agent not registered");
 
-        // Calculate and take dynamic deposit
+        // Calculate and take dynamic deposit (in first accepted token)
         uint256 deposit = calculateDeposit(params_.targetPoolSize);
-        paymentToken.safeTransferFrom(msg.sender, address(this), deposit);
+        depositToken.safeTransferFrom(msg.sender, address(this), deposit);
+
+        // Build token arrays for vault initialization
+        uint8[] memory decimals_ = new uint8[](acceptedTokens.length);
+        for (uint256 i = 0; i < acceptedTokens.length; i++) {
+            decimals_[i] = tokenDecimals[acceptedTokens[i]];
+        }
 
         // Deploy clone
         vault = vaultImplementation.clone();
@@ -113,7 +124,8 @@ contract RaffleFactory is Ownable {
         RaffleVault(payable(vault)).initialize(
             params_,
             msg.sender,
-            address(paymentToken),
+            acceptedTokens,
+            decimals_,
             address(ticketNFT),
             address(receiptSBT),
             address(agentRegistry),
@@ -164,8 +176,8 @@ contract RaffleFactory is Ownable {
         uint256 aroRefund = (deposit * refundBps) / 10000;
         uint256 protocolFee = deposit - aroRefund;
 
-        paymentToken.safeTransfer(msg.sender, aroRefund);
-        paymentToken.safeTransfer(protocolFeeRecipient, protocolFee);
+        depositToken.safeTransfer(msg.sender, aroRefund);
+        depositToken.safeTransfer(protocolFeeRecipient, protocolFee);
 
         emit DepositRefunded(msg.sender, vault, aroRefund, protocolFee);
     }
@@ -194,7 +206,7 @@ contract RaffleFactory is Ownable {
         uint256 deposit = aroDeposits[vault];
         aroDeposits[vault] = 0;
 
-        paymentToken.safeTransfer(protocolFeeRecipient, deposit);
+        depositToken.safeTransfer(protocolFeeRecipient, deposit);
         emit DepositSwept(vault, deposit);
     }
 
@@ -203,16 +215,24 @@ contract RaffleFactory is Ownable {
     /// @notice Calculate the required deposit for creating a raffle.
     ///         Uses the same sqrt scaling as agent staking.
     ///         deposit = max(MIN_DEPOSIT, BASE_DEPOSIT × sqrt(targetPoolSize / REFERENCE_SIZE))
-    /// @param targetPoolSize The ARO-configured expected pool size
+    /// @param targetPoolSizeCents The ARO-configured expected pool size in USD cents
     /// @return The required deposit amount
-    function calculateDeposit(uint256 targetPoolSize) public pure returns (uint256) {
-        if (targetPoolSize == 0) return MIN_DEPOSIT;
+    /// @notice Calculate required ARO deposit in USD cents based on target pool size (also in cents).
+    function calculateDepositCents(uint256 targetPoolSizeCents) public pure returns (uint256) {
+        if (targetPoolSizeCents == 0) return MIN_DEPOSIT_CENTS;
 
-        uint256 scaled = (targetPoolSize * 1e18) / REFERENCE_SIZE;
+        uint256 scaled = (targetPoolSizeCents * 1e18) / REFERENCE_SIZE_CENTS;
         uint256 sqrtScaled = Math.sqrt(scaled);
-        uint256 deposit = (BASE_DEPOSIT * sqrtScaled) / 1e9;
+        uint256 depositCents = (BASE_DEPOSIT_CENTS * sqrtScaled) / 1e9;
 
-        return deposit > MIN_DEPOSIT ? deposit : MIN_DEPOSIT;
+        return depositCents > MIN_DEPOSIT_CENTS ? depositCents : MIN_DEPOSIT_CENTS;
+    }
+
+    /// @notice Calculate deposit in the deposit token's actual units (accounting for decimals)
+    function calculateDeposit(uint256 targetPoolSizeCents) public view returns (uint256) {
+        uint256 cents = calculateDepositCents(targetPoolSizeCents);
+        uint8 dec = tokenDecimals[acceptedTokens[0]];
+        return (cents * (10 ** uint256(dec))) / 100;
     }
 
     // ============ Admin functions ============

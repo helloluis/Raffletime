@@ -30,14 +30,14 @@ contract RaffleVault is ReentrancyGuard {
     struct RaffleParams {
         string name;
         string description;
-        uint256 ticketPrice; // in cUSD decimals (18)
+        uint256 ticketPriceCents; // price in USD cents (e.g., 10 = $0.10)
         uint256 maxEntriesPerUser;
         uint256 numWinners;
         uint256 winnerShareBps; // basis points (e.g., 9000 = 90%)
         uint256 beneficiaryShareBps; // basis points (e.g., 1000 = 10%)
         address[] beneficiaryOptions;
         uint256 duration; // in seconds
-        uint256 targetPoolSize; // for stake calculation
+        uint256 targetPoolSize; // in USD cents for stake calculation
         uint256 minUniqueParticipants;
         bool agentsOnly; // if true, only ERC-8004 registered agents can enter
     }
@@ -51,7 +51,11 @@ contract RaffleVault is ReentrancyGuard {
     uint256 public createdAt;
     uint256 public closesAt;
 
-    IERC20 public paymentToken;
+    // Multi-token support
+    address[] public acceptedTokens;
+    mapping(address => uint8) public tokenDecimals; // decimals per token
+    mapping(address => bool) public isAcceptedToken;
+
     TicketNFT public ticketNFT;
     ReceiptSBT public receiptSBT;
     AgentRegistry public agentRegistry;
@@ -64,6 +68,7 @@ contract RaffleVault is ReentrancyGuard {
     /// @notice Participants (direct entry — recorded immediately)
     address[] public participants;
     mapping(address => uint256) public entryCount;
+    mapping(address => address) public entryToken; // which token each participant used
 
     /// @notice Unique participant tracking
     uint256 public uniqueParticipantCount;
@@ -71,7 +76,7 @@ contract RaffleVault is ReentrancyGuard {
     /// @notice Beneficiary vote tally
     mapping(address => uint256) public beneficiaryVotes;
 
-    /// @notice Total pool accumulated
+    /// @notice Total pool in USD cents (normalized across all tokens)
     uint256 public totalPool;
 
     /// @notice Witnet randomness tracking
@@ -113,7 +118,8 @@ contract RaffleVault is ReentrancyGuard {
     function initialize(
         RaffleParams calldata params_,
         address creator_,
-        address paymentToken_,
+        address[] calldata acceptedTokens_,
+        uint8[] calldata tokenDecimals_,
         address ticketNFT_,
         address receiptSBT_,
         address agentRegistry_,
@@ -123,10 +129,12 @@ contract RaffleVault is ReentrancyGuard {
     ) external {
         require(state == State.UNINITIALIZED, "Already initialized");
         require(params_.winnerShareBps + params_.beneficiaryShareBps == 10000, "Shares must total 100%");
-        require(params_.ticketPrice >= 0.01e18 && params_.ticketPrice <= 100e18, "Invalid ticket price");
+        require(params_.ticketPriceCents >= 1 && params_.ticketPriceCents <= 10000, "Invalid ticket price (1-10000 cents)");
         require(params_.maxEntriesPerUser >= 1 && params_.maxEntriesPerUser <= 100, "Invalid max entries");
         require(params_.numWinners >= 1, "Need at least 1 winner");
         require(params_.duration > 0, "Zero duration");
+        require(acceptedTokens_.length > 0, "Need at least 1 token");
+        require(acceptedTokens_.length == tokenDecimals_.length, "Token/decimals mismatch");
         require(
             params_.minUniqueParticipants >= params_.numWinners + 1,
             "Min participants must exceed numWinners"
@@ -140,12 +148,18 @@ contract RaffleVault is ReentrancyGuard {
             );
         }
 
+        // Store accepted tokens
+        for (uint256 i = 0; i < acceptedTokens_.length; i++) {
+            acceptedTokens.push(acceptedTokens_[i]);
+            tokenDecimals[acceptedTokens_[i]] = tokenDecimals_[i];
+            isAcceptedToken[acceptedTokens_[i]] = true;
+        }
+
         params = params_;
         creator = creator_;
         createdAt = block.timestamp;
         closesAt = block.timestamp + params_.duration;
 
-        paymentToken = IERC20(paymentToken_);
         ticketNFT = TicketNFT(ticketNFT_);
         receiptSBT = ReceiptSBT(receiptSBT_);
         agentRegistry = AgentRegistry(agentRegistry_);
@@ -158,11 +172,25 @@ contract RaffleVault is ReentrancyGuard {
         emit RaffleInitialized(address(this), creator_, params_.name);
     }
 
+    /// @notice Convert USD cents to token amount based on token decimals
+    function _centsToTokenAmount(uint256 cents, address token) internal view returns (uint256) {
+        uint8 dec = tokenDecimals[token];
+        // cents = 10 means $0.10. With 6 decimals: 10 * 10^6 / 100 = 100000
+        // With 18 decimals: 10 * 10^18 / 100 = 100000000000000000
+        return (cents * (10 ** uint256(dec))) / 100;
+    }
+
+    /// @notice Get the list of accepted token addresses
+    function getAcceptedTokens() external view returns (address[] memory) {
+        return acceptedTokens;
+    }
+
     // ============ OPEN Phase: Direct entry ============
 
-    /// @notice Enter the raffle directly. Payment is taken and participant is recorded immediately.
-    /// @param beneficiaryVote The beneficiary address the participant votes for
-    function enterRaffle(address beneficiaryVote) external onlyState(State.OPEN) nonReentrant {
+    /// @notice Enter the raffle. Caller specifies which accepted token to pay with.
+    /// @param token The ERC-20 token to pay with (address(0) = use first accepted token)
+    /// @param beneficiaryVote The beneficiary to vote for (address(0) = first option or none)
+    function enterRaffle(address token, address beneficiaryVote) external onlyState(State.OPEN) nonReentrant {
         require(block.timestamp < closesAt, "Raffle period ended");
         require(!agentRegistry.isSuspended(msg.sender), "Agent suspended");
         if (params.agentsOnly) {
@@ -171,8 +199,19 @@ contract RaffleVault is ReentrancyGuard {
         }
         require(entryCount[msg.sender] < params.maxEntriesPerUser, "Max entries reached");
 
-        // Validate beneficiary vote
-        if (params.beneficiaryOptions.length > 0) {
+        // Default token: first accepted token
+        if (token == address(0)) {
+            token = acceptedTokens[0];
+        }
+        require(isAcceptedToken[token], "Token not accepted");
+
+        // Default beneficiary: first option (or zero if no options)
+        if (beneficiaryVote == address(0) && params.beneficiaryOptions.length > 0) {
+            beneficiaryVote = params.beneficiaryOptions[0];
+        }
+
+        // Validate beneficiary vote if options exist
+        if (params.beneficiaryOptions.length > 0 && beneficiaryVote != address(0)) {
             bool validVote = false;
             for (uint256 i = 0; i < params.beneficiaryOptions.length; i++) {
                 if (params.beneficiaryOptions[i] == beneficiaryVote) {
@@ -183,19 +222,23 @@ contract RaffleVault is ReentrancyGuard {
             require(validVote, "Invalid beneficiary vote");
         }
 
-        // Take payment
-        paymentToken.safeTransferFrom(msg.sender, address(this), params.ticketPrice);
-        totalPool += params.ticketPrice;
+        // Take payment (convert USD cents to token amount)
+        uint256 amount = _centsToTokenAmount(params.ticketPriceCents, token);
+        IERC20(token).safeTransferFrom(msg.sender, address(this), amount);
+        totalPool += params.ticketPriceCents; // pool tracked in cents
 
         // Track unique participants
         if (entryCount[msg.sender] == 0) {
             uniqueParticipantCount++;
+            entryToken[msg.sender] = token; // remember which token they used
         }
         entryCount[msg.sender]++;
         participants.push(msg.sender);
 
         // Track beneficiary vote
-        beneficiaryVotes[beneficiaryVote]++;
+        if (beneficiaryVote != address(0)) {
+            beneficiaryVotes[beneficiaryVote]++;
+        }
 
         // Mint ticket NFT
         uint256 ticketNumber = participants.length;
@@ -203,6 +246,7 @@ contract RaffleVault is ReentrancyGuard {
 
         emit EntryAdded(msg.sender, ticketNumber, beneficiaryVote);
     }
+
 
     // ============ CLOSED Phase ============
 
@@ -324,19 +368,20 @@ contract RaffleVault is ReentrancyGuard {
     // ============ PAYOUT Phase: Distribute prizes ============
 
     /// @notice Distribute prizes to winners and beneficiary. Transition to SETTLED.
+    ///         Pays from all accepted tokens proportionally based on vault balances.
     function distributePrizes() external onlyState(State.PAYOUT) nonReentrant {
-        uint256 winnerPool = (totalPool * params.winnerShareBps) / 10000;
-        uint256 beneficiaryPool = (totalPool * params.beneficiaryShareBps) / 10000;
+        uint256 winnerShareCents = (totalPool * params.winnerShareBps) / 10000;
+        uint256 beneficiaryShareCents = (totalPool * params.beneficiaryShareBps) / 10000;
 
-        // Pay winners with dust distribution to last winner
+        // Pay winners
         if (winners.length > 0) {
-            uint256 prizePerWinner = winnerPool / winners.length;
-            uint256 remainder = winnerPool % winners.length;
+            uint256 prizePerWinnerCents = winnerShareCents / winners.length;
+            uint256 remainderCents = winnerShareCents % winners.length;
 
             for (uint256 i = 0; i < winners.length; i++) {
-                uint256 prize = prizePerWinner + (i == winners.length - 1 ? remainder : 0);
-                paymentToken.safeTransfer(winners[i], prize);
-                emit PrizeDistributed(winners[i], prize);
+                uint256 prizeCents = prizePerWinnerCents + (i == winners.length - 1 ? remainderCents : 0);
+                _payFromVault(winners[i], prizeCents);
+                emit PrizeDistributed(winners[i], prizeCents);
 
                 uint256 agentId = agentRegistry.getAgentIdByAddress(winners[i]);
                 if (agentId > 0) {
@@ -346,9 +391,9 @@ contract RaffleVault is ReentrancyGuard {
         }
 
         // Pay beneficiary
-        if (winningBeneficiary != address(0) && beneficiaryPool > 0) {
-            paymentToken.safeTransfer(winningBeneficiary, beneficiaryPool);
-            emit BeneficiaryPaid(winningBeneficiary, beneficiaryPool);
+        if (winningBeneficiary != address(0) && beneficiaryShareCents > 0) {
+            _payFromVault(winningBeneficiary, beneficiaryShareCents);
+            emit BeneficiaryPaid(winningBeneficiary, beneficiaryShareCents);
         }
 
         // Mint settlement receipt SBT
@@ -357,6 +402,29 @@ contract RaffleVault is ReentrancyGuard {
         state = State.SETTLED;
         emit StateTransition(State.PAYOUT, State.SETTLED);
         emit RaffleSettled(receiptId);
+    }
+
+    /// @notice Pay a recipient from the vault's token balances.
+    ///         Iterates accepted tokens and pays from whichever has enough balance.
+    function _payFromVault(address recipient, uint256 amountCents) internal {
+        uint256 remaining = amountCents;
+        for (uint256 i = 0; i < acceptedTokens.length && remaining > 0; i++) {
+            address token = acceptedTokens[i];
+            uint256 tokenAmount = _centsToTokenAmount(remaining, token);
+            uint256 balance = IERC20(token).balanceOf(address(this));
+
+            if (balance >= tokenAmount) {
+                IERC20(token).safeTransfer(recipient, tokenAmount);
+                remaining = 0;
+            } else if (balance > 0) {
+                // Partial payment from this token
+                IERC20(token).safeTransfer(recipient, balance);
+                // Calculate how many cents this covered
+                uint8 dec = tokenDecimals[token];
+                uint256 centsCovered = (balance * 100) / (10 ** uint256(dec));
+                remaining = remaining > centsCovered ? remaining - centsCovered : 0;
+            }
+        }
     }
 
     // ============ INVALID: Refund path ============
@@ -373,16 +441,13 @@ contract RaffleVault is ReentrancyGuard {
         require(entries > 0, "No entries");
 
         entryCount[msg.sender] = 0;
-        uint256 refundAmount = entries * params.ticketPrice;
+        uint256 refundCents = entries * params.ticketPriceCents;
+        _payFromVault(msg.sender, refundCents);
 
-        paymentToken.safeTransfer(msg.sender, refundAmount);
-
-        emit RefundIssued(msg.sender, refundAmount);
+        emit RefundIssued(msg.sender, refundCents);
     }
 
     /// @notice Push refunds to all participants at once (callable by anyone).
-    ///         Gas cost scales with participant count. For house raffles with
-    ///         small participant counts this is practical and provides better UX.
     function distributeRefunds() external onlyState(State.INVALID) nonReentrant {
         uint256 len = participants.length;
         require(len > 0, "No participants");
@@ -393,9 +458,9 @@ contract RaffleVault is ReentrancyGuard {
             if (entries == 0) continue;
 
             entryCount[participant] = 0;
-            uint256 refundAmount = entries * params.ticketPrice;
-            paymentToken.safeTransfer(participant, refundAmount);
-            emit RefundIssued(participant, refundAmount);
+            uint256 refundCents = entries * params.ticketPriceCents;
+            _payFromVault(participant, refundCents);
+            emit RefundIssued(participant, refundCents);
         }
     }
 
