@@ -748,7 +748,7 @@ export function createApi(): Hono {
     <div id="hero">
       <div class="countdown" id="timer">00:00<span class="ms">000</span></div>
       <div class="stats" id="stats">
-        To win: <span id="pool">${formatCash(initialPool)}</span> <span class="spec-pill">House</span> <span class="spec-pill">1x Winner</span><br>
+        <span id="pool-line">To win: <span id="pool">${formatCash(initialPool)}</span> <span class="spec-pill">House</span> <span class="spec-pill">1x Winner</span></span><br>
         <a href="/raffles/${initialVault}" id="participants-link" style="color:inherit;text-decoration:none;border-bottom:1px dashed #000"><span id="participants">${initialParticipants}</span> participants</a>
       </div>
       <div id="join-area">
@@ -793,6 +793,8 @@ export function createApi(): Hono {
             pendingVault = null;
             joinArea.innerHTML = '<button class="cta" id="join-btn" onclick="openJoinModal()">Join ${ticketPrice}</button>';
             joinArea.style.display = '';
+            var pl1 = document.getElementById('pool-line');
+            if(pl1) pl1.style.display = '';
             resultLine.style.display = 'none';
             poolEl.textContent = '$0.00';
             partEl.textContent = '0';
@@ -844,10 +846,14 @@ export function createApi(): Hono {
           document.body.style.backgroundColor = '#CCBBBB';
         }
 
+        var poolLine = document.getElementById('pool-line');
+
         if(p === 'DRAWING_'){
           resultLine.style.display = 'none';
+          if(poolLine) poolLine.style.display = 'none';
           typeIv = typewrite('DRAWING', timerEl);
         } else if(p === 'RESULT_'){
+          if(poolLine) poolLine.style.display = 'none';
           typeIv = typewrite('RESULT', timerEl);
           if(winners.length > 0){
             var w = winners[0];
@@ -857,16 +863,20 @@ export function createApi(): Hono {
             resultLine.style.display = '';
           }
         } else if(p === 'DISTRIB_'){
+          if(poolLine) poolLine.style.display = 'none';
           typeIv = typewrite('DISTRIB', timerEl);
         } else if(p === 'INVALID_'){
           resultLine.style.display = 'none';
+          if(poolLine) poolLine.style.display = 'none';
           typeIv = typewrite('INVALID', timerEl);
         } else if(p === 'REFUND_'){
+          if(poolLine) poolLine.style.display = 'none';
           resultLine.innerHTML = 'Not enough participants. Refunds available.';
           resultLine.style.display = '';
           typeIv = typewrite('REFUND', timerEl);
         } else if(p === 'RESET_'){
           resultLine.style.display = 'none';
+          if(poolLine) poolLine.style.display = 'none';
           poolEl.textContent = '$0.00';
           partEl.textContent = '0';
           typeIv = typewrite('RESET', timerEl);
@@ -877,9 +887,13 @@ export function createApi(): Hono {
               pendingVault = null;
             }
             phase = null;
+            state = 'OPEN'; // Prevent tick from re-entering RESULT_ on stale state
+            winners = [];
             joinArea.innerHTML = '<button class="cta" id="join-btn" onclick="openJoinModal()">Join ${ticketPrice}</button>';
             joinArea.style.display = '';
             if(partLink) partLink.href = '/raffles/'+vault;
+            var pl2 = document.getElementById('pool-line');
+            if(pl2) pl2.style.display = '';
             document.body.style.transition = 'background-color 2s ease';
             document.body.style.backgroundColor = '#908888';
             if(typeIv) clearInterval(typeIv);
