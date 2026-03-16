@@ -109,6 +109,83 @@ async function buildPrevRafflesHtml(): Promise<string> {
   }
 }
 
+/** Build participant list HTML for a raffle detail page */
+async function buildParticipantsHtml(vault: Address, info: { participantCount: bigint; state: number }): Promise<string> {
+  if (info.participantCount === 0n) return "";
+
+  try {
+    // Read wallet registry to identify house players
+    let houseAddrs = new Set<string>();
+    try {
+      const { readFileSync, existsSync } = await import("fs");
+      const { resolve, dirname } = await import("path");
+      const { fileURLToPath } = await import("url");
+      const dir = dirname(fileURLToPath(import.meta.url));
+      const regPath = resolve(dir, "../data/test-wallets.json");
+      if (existsSync(regPath)) {
+        const reg = JSON.parse(readFileSync(regPath, "utf-8"));
+        for (const w of Object.values(reg) as any[]) {
+          houseAddrs.add(w.address.toLowerCase());
+        }
+      }
+    } catch {}
+
+    // Read participants by index
+    const ParticipantsAbi = [
+      { name: "participants", type: "function", stateMutability: "view", inputs: [{ name: "", type: "uint256" }], outputs: [{ name: "", type: "address" }] },
+      { name: "entryCount", type: "function", stateMutability: "view", inputs: [{ name: "", type: "address" }], outputs: [{ name: "", type: "uint256" }] },
+    ] as const;
+
+    // Deduplicate — participants array may have repeats (multi-ticket)
+    const seen = new Map<string, number>(); // address -> ticket count
+    const count = Number(info.participantCount);
+    for (let i = 0; i < count && i < 50; i++) {
+      try {
+        const addr = (await publicClient.readContract({
+          address: vault,
+          abi: ParticipantsAbi,
+          functionName: "participants",
+          args: [BigInt(i)],
+        })) as string;
+        seen.set(addr.toLowerCase(), (seen.get(addr.toLowerCase()) || 0) + 1);
+      } catch { break; }
+    }
+
+    // Check winners
+    let winnerSet = new Set<string>();
+    if (info.state === 5) { // SETTLED
+      try {
+        const winners = (await publicClient.readContract({
+          address: vault, abi: RaffleVaultAbi, functionName: "getWinners",
+        })) as string[];
+        for (const w of winners) winnerSet.add(w.toLowerCase());
+      } catch {}
+    }
+
+    const rows = Array.from(seen.entries()).map(([addr, tickets]) => {
+      const short = `${addr.slice(0, 6)}...${addr.slice(-4)}`;
+      const link = `<a href="https://sepolia.celoscan.io/address/${addr}" target="_blank" style="color:inherit">${short}</a>`;
+      const isHouse = houseAddrs.has(addr);
+      const isWinner = winnerSet.has(addr);
+      const badges = [
+        isHouse ? '<span class="spec-pill" style="background:#555">House Player</span>' : '',
+        isWinner ? '<span class="spec-pill" style="background:#8b1a11">Winner</span>' : '',
+      ].filter(Boolean).join(' ');
+      return `<tr><td>${link}</td><td>${tickets}</td><td>${badges}</td></tr>`;
+    });
+
+    return `<div class="section">
+      <h2>Participants (${seen.size})</h2>
+      <table class="prev-table">
+        <tr><th>Address</th><th>Tickets</th><th></th></tr>
+        ${rows.join("\n        ")}
+      </table>
+    </div>`;
+  } catch {
+    return "";
+  }
+}
+
 export function createApi(): Hono {
   const app = new Hono();
 
@@ -1049,6 +1126,8 @@ Content-Type: application/json
     ${info.state === RaffleState.OPEN ? `<p style="margin: 1.5rem 0"><a href="/raffles/${address}" class="cta">Join $${ticketPrice}</a></p>` : ""}
 
     ${actionHtml}
+
+    ${await buildParticipantsHtml(address, info)}
 
     <p style="margin-top: 1.5rem">
       <a href="/api/raffles/${address}">JSON details</a> &middot;
