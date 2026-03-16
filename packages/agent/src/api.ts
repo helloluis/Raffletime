@@ -72,11 +72,23 @@ async function buildPrevRafflesHtml(): Promise<string> {
           winnerHtml = "—";
         } else if (state === 5) {
           statusHtml = dateStr;
+          // Read winner from DB (fast) with fallback to on-chain
           try {
-            const winners = (await publicClient.readContract({ address: vault, abi: RaffleVaultAbi, functionName: "getWinners" })) as string[];
-            if (winners.length > 0) {
-              const w = winners[0];
-              winnerHtml = `<a href="https://sepolia.celoscan.io/address/${w}" target="_blank">${w.slice(0,6)}...${w.slice(-4)}</a>`;
+            const dbResult = await db.getResult(vault);
+            if (dbResult?.winner) {
+              const w = dbResult.winner;
+              const wName = dbResult.winner_name;
+              const short = `${w.slice(0,6)}...${w.slice(-4)}`;
+              winnerHtml = wName
+                ? `${houseIcon}<strong>${wName}</strong> <a href="https://sepolia.celoscan.io/address/${w}" target="_blank" style="color:inherit">${short}</a>`
+                : `<a href="https://sepolia.celoscan.io/address/${w}" target="_blank">${short}</a>`;
+            } else {
+              // Fallback to on-chain
+              const winners = (await publicClient.readContract({ address: vault, abi: RaffleVaultAbi, functionName: "getWinners" })) as string[];
+              if (winners.length > 0) {
+                const w = winners[0];
+                winnerHtml = `<a href="https://sepolia.celoscan.io/address/${w}" target="_blank">${w.slice(0,6)}...${w.slice(-4)}</a>`;
+              }
             }
           } catch {}
         } else if (state === 6) {
@@ -147,66 +159,67 @@ async function buildParticipantsHtml(vault: Address, info: { participantCount: b
       } catch {}
     }
 
-    // Look up agent identities — DB first, then on-chain, write back to DB
+    // Try DB first for all participant identities (fast path)
     const agentNames = new Map<string, string>();
     const housePlayerAddrs = new Set<string>();
 
-    for (const addr of seen.keys()) {
-      // Check DB first
-      try {
-        const dbAgent = await db.getAgent(addr);
-        if (dbAgent) {
-          if (dbAgent.name) agentNames.set(addr, dbAgent.name);
-          if (dbAgent.is_house) housePlayerAddrs.add(addr);
-          continue;
-        }
-      } catch {}
+    // Check if we have DB entries for this raffle
+    let dbEntries: any[] = [];
+    try {
+      dbEntries = await db.getEntriesForRaffle(vault);
+    } catch {}
 
+    if (dbEntries.length > 0) {
+      // DB has entries — use them (fast, no RPC calls)
+      for (const entry of dbEntries) {
+        if (entry.name) agentNames.set(entry.agent, entry.name);
+        if (entry.is_house) housePlayerAddrs.add(entry.agent);
+      }
+    } else {
       // DB miss — look up on-chain and write back
-      try {
-        const agentId = (await publicClient.readContract({
-          address: config.contracts.agentRegistry,
-          abi: AgentLookupAbi,
-          functionName: "getAgentIdByAddress",
-          args: [addr as Address],
-        })) as bigint;
+      for (const addr of seen.keys()) {
+        try {
+          const dbAgent = await db.getAgent(addr);
+          if (dbAgent) {
+            if (dbAgent.name) agentNames.set(addr, dbAgent.name);
+            if (dbAgent.is_house) housePlayerAddrs.add(addr);
+            continue;
+          }
+        } catch {}
 
-        if (agentId > 0n) {
-          const uri = (await publicClient.readContract({
+        try {
+          const agentId = (await publicClient.readContract({
             address: config.contracts.agentRegistry,
             abi: AgentLookupAbi,
-            functionName: "tokenURI",
-            args: [agentId],
-          })) as string;
+            functionName: "getAgentIdByAddress",
+            args: [addr as Address],
+          })) as bigint;
 
-          let name: string | null = null;
-          const nameMatch = uri.match(/\/agents\/([^/.]+)\.json/);
-          if (nameMatch) {
-            name = nameMatch[1].charAt(0).toUpperCase() + nameMatch[1].slice(1).replace(/-/g, ' ');
-            agentNames.set(addr, name);
+          if (agentId > 0n) {
+            const uri = (await publicClient.readContract({
+              address: config.contracts.agentRegistry,
+              abi: AgentLookupAbi,
+              functionName: "tokenURI",
+              args: [agentId],
+            })) as string;
+
+            let name: string | null = null;
+            const nameMatch = uri.match(/\/agents\/([^/.]+)\.json/);
+            if (nameMatch) {
+              name = nameMatch[1].charAt(0).toUpperCase() + nameMatch[1].slice(1).replace(/-/g, ' ');
+              agentNames.set(addr, name);
+            }
+
+            const isHouse = uri.includes("raffletime.io");
+            if (isHouse) housePlayerAddrs.add(addr);
+
+            try {
+              await db.upsertAgent({ address: addr, agentId: Number(agentId), name, uri, isHouse, registered: true });
+              await db.recordEntry(vault, addr, seen.get(addr) || 1);
+            } catch {}
           }
-
-          const isHouse = uri.includes("raffletime.io");
-          if (isHouse) housePlayerAddrs.add(addr);
-
-          // Write to DB
-          try {
-            await db.upsertAgent({
-              address: addr,
-              agentId: Number(agentId),
-              name,
-              uri,
-              isHouse,
-              registered: true,
-            });
-          } catch {}
-        }
-      } catch {}
-
-      // Record entry in DB
-      try {
-        await db.recordEntry(vault, addr, seen.get(addr) || 1);
-      } catch {}
+        } catch {}
+      }
     }
 
     const rows = Array.from(seen.entries()).map(([addr, tickets]) => {

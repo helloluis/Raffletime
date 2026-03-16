@@ -10,6 +10,84 @@ import {
 import { config } from "./config.js";
 import * as db from "./db.js";
 
+/** Resolve an address to an agent name via on-chain AgentRegistry + cache in DB */
+async function resolveAgentName(address: Address): Promise<string | null> {
+  // Check DB first
+  const cached = await db.getAgent(address);
+  if (cached?.name) return cached.name;
+
+  // Look up on-chain
+  try {
+    const AgentLookupAbi = [
+      { name: "getAgentIdByAddress", type: "function", stateMutability: "view", inputs: [{ name: "agent", type: "address" }], outputs: [{ name: "", type: "uint256" }] },
+      { name: "tokenURI", type: "function", stateMutability: "view", inputs: [{ name: "agentId", type: "uint256" }], outputs: [{ name: "", type: "string" }] },
+    ] as const;
+
+    const agentId = (await publicClient.readContract({
+      address: config.contracts.agentRegistry,
+      abi: AgentLookupAbi,
+      functionName: "getAgentIdByAddress",
+      args: [address],
+    })) as bigint;
+
+    if (agentId === 0n) return null;
+
+    const uri = (await publicClient.readContract({
+      address: config.contracts.agentRegistry,
+      abi: AgentLookupAbi,
+      functionName: "tokenURI",
+      args: [agentId],
+    })) as string;
+
+    let name: string | null = null;
+    const nameMatch = uri.match(/\/agents\/([^/.]+)\.json/);
+    if (nameMatch) {
+      name = nameMatch[1].charAt(0).toUpperCase() + nameMatch[1].slice(1).replace(/-/g, " ");
+    }
+
+    const isHouse = uri.includes("raffletime.io");
+
+    // Write to DB for future lookups
+    await db.upsertAgent({
+      address,
+      agentId: Number(agentId),
+      name,
+      uri,
+      isHouse,
+      registered: true,
+    });
+
+    return name;
+  } catch {
+    return null;
+  }
+}
+
+/** Resolve all participants in a raffle and sync to DB */
+async function syncParticipants(vault: Address, participantCount: bigint): Promise<void> {
+  const ParticipantsAbi = [
+    { name: "participants", type: "function", stateMutability: "view", inputs: [{ name: "", type: "uint256" }], outputs: [{ name: "", type: "address" }] },
+  ] as const;
+
+  const seen = new Map<string, number>();
+  const count = Number(participantCount);
+  for (let i = 0; i < count && i < 100; i++) {
+    try {
+      const addr = (await publicClient.readContract({
+        address: vault, abi: ParticipantsAbi, functionName: "participants", args: [BigInt(i)],
+      })) as string;
+      seen.set(addr.toLowerCase(), (seen.get(addr.toLowerCase()) || 0) + 1);
+    } catch { break; }
+  }
+
+  for (const [addr, tickets] of seen.entries()) {
+    // Resolve name (writes to agents table)
+    await resolveAgentName(addr as Address);
+    // Record entry
+    await db.recordEntry(vault, addr, tickets);
+  }
+}
+
 // Raffle states matching the Solidity enum
 export enum RaffleState {
   UNINITIALIZED = 0,
@@ -448,18 +526,21 @@ export async function advanceRaffle(vault: Address): Promise<RaffleState> {
 
     case RaffleState.PAYOUT:
       await distributePrizes(vault);
-      // Record result in DB
+      // Sync all participant identities to DB, then record result
       try {
+        await syncParticipants(vault, info.participantCount);
         const winners = (await publicClient.readContract({
           address: vault, abi: RaffleVaultAbi, functionName: "getWinners",
         })) as string[];
         if (winners.length > 0) {
-          // Look up winner name from DB
-          const winnerAgent = await db.getAgent(winners[0]);
-          await db.recordResult(vault, winners[0], winnerAgent?.name || null, formatEther(info.totalPool));
+          const winnerName = await resolveAgentName(winners[0] as Address);
+          await db.recordResult(vault, winners[0], winnerName, formatEther(info.totalPool));
+          console.log(`[lifecycle] Winner: ${winnerName || winners[0].slice(0,10)} won $${formatEther(info.totalPool)}`);
         }
         await db.upsertRaffle({ vault, state: "SETTLED", settledAt: new Date() });
-      } catch {}
+      } catch (e) {
+        console.log("[lifecycle] DB sync error:", String(e).slice(0, 100));
+      }
       return RaffleState.SETTLED;
 
     case RaffleState.SETTLED:
