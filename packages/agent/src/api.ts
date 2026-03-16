@@ -663,6 +663,7 @@ export function createApi(): Hono {
       var phase = null; // null = countdown, 'DRAWING_', 'RESULT_', 'DISTRIB_', 'RESET_'
       var phaseStart = 0;
       var winners = [];
+      var pendingVault = null;
 
       // SSE: live updates from server
       var es = new EventSource('/api/raffles/live');
@@ -674,14 +675,22 @@ export function createApi(): Hono {
         if(d.participants) partEl.textContent = d.participants;
         if(d.winners && d.winners.length) winners = d.winners;
         if(d.vault && d.vault !== vault){
-          vault = d.vault;
-          // New raffle — reset to countdown mode
-          phase = null;
-          joinArea.innerHTML = '<button class="cta" id="join-btn" onclick="openJoinModal()">Join ${ticketPrice}</button>';
-          joinArea.style.display = '';
-          resultLine.style.display = 'none';
-          document.body.style.transition = 'background-color 2s ease';
-          document.body.style.backgroundColor = '#908888';
+          if(phase && phase !== 'RESET_'){
+            // In post-raffle timeline — queue the new vault, don't switch yet
+            pendingVault = d.vault;
+          } else {
+            // Not in a phase or already at RESET — switch immediately
+            vault = d.vault;
+            phase = null;
+            pendingVault = null;
+            joinArea.innerHTML = '<button class="cta" id="join-btn" onclick="openJoinModal()">Join ${ticketPrice}</button>';
+            joinArea.style.display = '';
+            resultLine.style.display = 'none';
+            poolEl.textContent = '$0.00';
+            partEl.textContent = '0';
+            document.body.style.transition = 'background-color 2s ease';
+            document.body.style.backgroundColor = '#908888';
+          }
         }
       });
 
@@ -749,7 +758,23 @@ export function createApi(): Hono {
           typeIv = typewrite('REFUND', timerEl);
         } else if(p === 'RESET_'){
           resultLine.style.display = 'none';
+          poolEl.textContent = '$0.00';
+          partEl.textContent = '0';
           typeIv = typewrite('RESET', timerEl);
+          // After 15s at RESET_, switch to pending vault
+          setTimeout(function(){
+            if(pendingVault){
+              vault = pendingVault;
+              pendingVault = null;
+            }
+            phase = null;
+            joinArea.innerHTML = '<button class="cta" id="join-btn" onclick="openJoinModal()">Join ${ticketPrice}</button>';
+            joinArea.style.display = '';
+            document.body.style.transition = 'background-color 2s ease';
+            document.body.style.backgroundColor = '#908888';
+            if(typeIv) clearInterval(typeIv);
+            timerEl.style.color = '';
+          }, 15000);
         }
       }
 
