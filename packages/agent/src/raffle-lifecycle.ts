@@ -176,7 +176,7 @@ export async function getRaffleInfo(vault: Address): Promise<RaffleInfo> {
       publicClient.readContract({
         address: vault,
         abi: RaffleVaultAbi,
-        functionName: "getParticipantCount",
+        functionName: "uniqueParticipantCount",
       }),
       publicClient.readContract({
         address: vault,

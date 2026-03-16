@@ -19,7 +19,9 @@ import { buildAgentCard } from "./agent-cards.js";
 import * as db from "./db.js";
 
 /** Build HTML table of all raffles (active + settled + invalid) */
-async function buildPrevRafflesHtml(): Promise<string> {
+async function buildRafflesTableHtml(opts: { limit?: number; page?: number; showPagination?: boolean } = {}): Promise<string> {
+  const PAGE_SIZE = opts.limit || 5;
+  const page = opts.page || 1;
   try {
     const count = (await publicClient.readContract({
       address: config.contracts.registry,
@@ -32,15 +34,21 @@ async function buildPrevRafflesHtml(): Promise<string> {
       0: "INIT", 1: "OPEN", 2: "CLOSED", 3: "DRAWING", 4: "PAYOUT", 5: "SETTLED", 6: "INVALID",
     };
 
-    // Scan last 20 raffles max, newest first
-    const start = count > 20n ? count - 20n : 0n;
-    for (let i = count - 1n; i >= start; i--) {
+    const totalRaffles = Number(count);
+    const totalPages = Math.max(1, Math.ceil(totalRaffles / PAGE_SIZE));
+
+    // Calculate range for this page (newest first)
+    const endIdx = totalRaffles - ((page - 1) * PAGE_SIZE) - 1;
+    const startIdx = Math.max(0, endIdx - PAGE_SIZE + 1);
+
+    for (let i = endIdx; i >= startIdx; i--) {
+      if (i < 0) break;
       try {
         const entry = (await publicClient.readContract({
           address: config.contracts.registry,
           abi: RaffleRegistryAbi,
           functionName: "getRaffle",
-          args: [i],
+          args: [BigInt(i)],
         })) as any;
 
         const vault = (entry.vault || entry[0]) as Address;
@@ -62,7 +70,7 @@ async function buildPrevRafflesHtml(): Promise<string> {
         try {
           const tp = (await publicClient.readContract({ address: vault, abi: RaffleVaultAbi, functionName: "totalPool" })) as bigint;
           pool = formatCash(formatEther(tp));
-          const pc = (await publicClient.readContract({ address: vault, abi: RaffleVaultAbi, functionName: "getParticipantCount" })) as bigint;
+          const pc = (await publicClient.readContract({ address: vault, abi: RaffleVaultAbi, functionName: "uniqueParticipantCount" })) as bigint;
           participants = pc.toString();
         } catch {}
 
@@ -114,12 +122,29 @@ async function buildPrevRafflesHtml(): Promise<string> {
 
     const tableHeader = `<tr><th>Name</th><th>Raffle</th><th>Status</th><th>Pool</th><th>Participants</th><th>Winner</th></tr>`;
 
+    // Pagination links
+    let paginationHtml = "";
+    if (opts.showPagination && totalPages > 1) {
+      const links: string[] = [];
+      for (let p = 1; p <= totalPages; p++) {
+        if (p === page) {
+          links.push(`<strong>${p}</strong>`);
+        } else {
+          links.push(`<a href="/raffles/all?page=${p}">${p}</a>`);
+        }
+      }
+      paginationHtml = `<p style="margin-top:1rem">${links.join(" &middot; ")}</p>`;
+    } else if (totalPages > 1) {
+      paginationHtml = `<p style="margin-top:0.75rem"><a href="/raffles/all">View all raffles →</a></p>`;
+    }
+
     return `<div class="section">
       <h2>All Raffles</h2>
       <table class="prev-table">
         ${tableHeader}
         ${rows.join("\n        ")}
       </table>
+      ${paginationHtml}
     </div>`;
   } catch {
     return "";
@@ -935,19 +960,19 @@ export function createApi(): Hono {
         <div class="step" id="step-register">
           <span class="step-num">2</span> Registration ($1 security deposit)
           <span class="step-status pending" id="status-register">waiting</span>
-          <p style="font-size:0.85rem;color:#555">One-time only. Approves and stakes $1 as a security deposit. Withdrawable after 14 days.</p>
+          <p style="font-size:0.85rem;color:#555">One-time only! Stake $1 as a security deposit. Withdrawable after 14 days if you no longer wish to play.</p>
         </div>
 
         <div class="step" id="step-badge">
           <span class="step-num">3</span> Mint Soulbound Badge
           <span class="step-status pending" id="status-badge">waiting</span>
-          <p style="font-size:0.85rem;color:#555">Your on-chain identity. Non-transferable NFT that proves you're a registered player.</p>
+          <p style="font-size:0.85rem;color:#555">Your on-chain identity: a non-transferable NFT that proves you're a registered player.</p>
         </div>
 
         <div class="step" id="step-ticket">
           <span class="step-num">4</span> Buy Ticket (${ticketPrice})
           <span class="step-status pending" id="status-ticket">waiting</span>
-          <p style="font-size:0.85rem;color:#555">Approves and purchases your raffle ticket. Good luck!</p>
+          <p style="font-size:0.85rem;color:#555">Purchase your raffle ticket/s. Good luck!</p>
         </div>
 
         <button class="modal-btn" id="modal-action" onclick="runJoinFlow()">Connect Wallet</button>
@@ -1142,13 +1167,21 @@ export function createApi(): Hono {
       </table>
     </div>
 
-    ${await buildPrevRafflesHtml()}
+    ${await buildRafflesTableHtml({ limit: 5 })}
     `));
   });
 
   app.get("/raffles", async (c) => {
-    // Redirect to home — raffles are listed there
-    return c.redirect("/");
+    return c.redirect("/raffles/all");
+  });
+
+  app.get("/raffles/all", async (c) => {
+    const page = parseInt(c.req.query("page") || "1");
+    const table = await buildRafflesTableHtml({ limit: 10, page, showPagination: true });
+    return c.html(layout("All Raffles", `
+    <a href="/" class="back-link">&larr; Back</a>
+    ${table}
+    `));
   });
 
   app.get("/raffles/:address", async (c) => {
