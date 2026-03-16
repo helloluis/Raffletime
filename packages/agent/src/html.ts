@@ -130,6 +130,12 @@ export function layout(title: string, body: string): string {
       text-transform: uppercase;
       letter-spacing: 0.05em;
       transition: background 0.15s;
+      border: none;
+      outline: none;
+      cursor: pointer;
+      -webkit-appearance: none;
+      appearance: none;
+      box-shadow: none;
     }
     .cta:hover { background: #5c110b; text-decoration: none; }
 

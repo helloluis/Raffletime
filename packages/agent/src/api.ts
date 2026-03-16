@@ -15,6 +15,7 @@ import { createX402Middleware } from "./x402.js";
 import { getRaffleMeta, getAllRaffleMeta, type RaffleMeta } from "./raffle-store.js";
 import { layout, stateLabel, formatCash, explorerLink } from "./html.js";
 import { serveStatic } from "@hono/node-server/serve-static";
+import { buildAgentCard } from "./agent-cards.js";
 
 /** Build HTML table of all raffles (active + settled + invalid) */
 async function buildPrevRafflesHtml(): Promise<string> {
@@ -125,29 +126,38 @@ export function createApi(): Hono {
 
   // ============ Agent discovery (ERC-8004 / agent.json) ============
 
+  // ERC-8004 agent registration files
+
   app.get("/.well-known/agent.json", (c) => {
-    return c.json({
+    return c.json(buildAgentCard({
       name: "RaffleTime House Agent",
-      version: "0.1.0",
-      description:
-        "Operates hourly house raffles on RaffleTime. Creates raffles, monitors lifecycle, triggers draws and payouts.",
-      url: `http://localhost:${config.port}`,
-      capabilities: [
-        "raffle-creation",
-        "raffle-monitoring",
-        "raffle-settlement",
-      ],
-      endpoints: {
-        raffles: "/api/raffles",
-        current: "/api/raffles/current",
-        enter: "/api/raffles/enter",
-        health: "/api/health",
-      },
-      chain: {
-        id: config.chainId,
-        contracts: config.contracts,
-      },
+      description: "Operates hourly house raffles on RaffleTime. Creates raffles, monitors lifecycle, triggers draws and payouts.",
+      image: "/images/raffy.png",
+      endpoint: `https://raffletime.io`,
+      agentId: 1,
+    }));
+  });
+
+  app.get("/.well-known/agent-registration.json", (c) => {
+    // ERC-8004 domain verification
+    return c.json({
+      registrations: [{
+        agentId: 1,
+        agentRegistry: `eip155:${config.chainId}:${config.contracts.agentRegistry}`,
+      }],
     });
+  });
+
+  // Serve ERC-8004 agent cards for registered test agents
+  app.get("/agents/:name.json", async (c) => {
+    const name = c.req.param("name") || "";
+    // Look up in wallet registry
+    const { loadWalletRegistry } = await import("./agent-cards.js");
+    const card = loadWalletRegistry(name);
+    if (!card) {
+      return c.json({ error: "Agent not found" }, 404);
+    }
+    return c.json(card);
   });
 
   // ============ Health ============

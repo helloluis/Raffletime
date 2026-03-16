@@ -400,4 +400,42 @@ contract AgentRegistry is ERC721, Ownable {
     function totalAgents() external view returns (uint256) {
         return _nextAgentId - 1;
     }
+
+    // ============ ERC-8004 Metadata ============
+
+    /// @notice Arbitrary key-value metadata per agent (ERC-8004 §metadata)
+    mapping(uint256 => mapping(string => bytes)) private _metadata;
+
+    /// @notice Delegated wallet per agent (ERC-8004 §wallet-delegation)
+    mapping(uint256 => address) private _agentWallets;
+
+    event MetadataUpdated(uint256 indexed agentId, string key);
+    event AgentWalletUpdated(uint256 indexed agentId, address newWallet);
+
+    /// @notice Get metadata value for a given agent and key
+    function getMetadata(uint256 agentId, string memory key) external view returns (bytes memory) {
+        require(agentId > 0 && agentId < _nextAgentId, "Invalid agent ID");
+        return _metadata[agentId][key];
+    }
+
+    /// @notice Set metadata value. Only the agent owner can set their own metadata.
+    function setMetadata(uint256 agentId, string memory key, bytes memory value) external {
+        require(ownerOf(agentId) == msg.sender, "Not agent owner");
+        _metadata[agentId][key] = value;
+        emit MetadataUpdated(agentId, key);
+    }
+
+    /// @notice Get the delegated wallet for an agent (defaults to NFT owner)
+    function getAgentWallet(uint256 agentId) external view returns (address) {
+        require(agentId > 0 && agentId < _nextAgentId, "Invalid agent ID");
+        address delegated = _agentWallets[agentId];
+        return delegated == address(0) ? ownerOf(agentId) : delegated;
+    }
+
+    /// @notice Delegate agent actions to a different wallet. Only agent owner can call.
+    function setAgentWallet(uint256 agentId, address newWallet) external {
+        require(ownerOf(agentId) == msg.sender, "Not agent owner");
+        _agentWallets[agentId] = newWallet;
+        emit AgentWalletUpdated(agentId, newWallet);
+    }
 }
