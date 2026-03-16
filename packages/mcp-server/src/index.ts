@@ -8,13 +8,90 @@ import {
 import { execSync, spawn } from "child_process";
 import { resolve, dirname } from "path";
 import { fileURLToPath } from "url";
-import { readFileSync, existsSync } from "fs";
+import { readFileSync, writeFileSync, existsSync, mkdirSync } from "fs";
 
 // Resolve paths
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PROJECT_ROOT = resolve(__dirname, "../..");
 const CONTRACTS_DIR = resolve(PROJECT_ROOT, "contracts");
 const AGENT_DIR = resolve(PROJECT_ROOT, "agent");
+
+// ============ Test agent wallet registry ============
+
+const WALLET_REGISTRY_PATH = resolve(PROJECT_ROOT, "agent/data/test-wallets.json");
+
+interface TestWallet {
+  name: string;
+  address: string;
+  privateKey: string;
+  registered: boolean;
+  createdAt: string;
+  totalSpent: string;   // wei
+  totalWon: string;     // wei
+  rafflesEntered: number;
+  rafflesWon: number;
+}
+
+function loadWalletRegistry(): Record<string, TestWallet> {
+  if (!existsSync(WALLET_REGISTRY_PATH)) return {};
+  try {
+    return JSON.parse(readFileSync(WALLET_REGISTRY_PATH, "utf-8"));
+  } catch {
+    return {};
+  }
+}
+
+function saveWalletRegistry(registry: Record<string, TestWallet>) {
+  const dir = dirname(WALLET_REGISTRY_PATH);
+  if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+  writeFileSync(WALLET_REGISTRY_PATH, JSON.stringify(registry, null, 2));
+}
+
+// Coffee bean varieties — 100+ names for test agents
+const BEAN_NAMES = [
+  "Arabica", "Robusta", "Typica", "Bourbon", "Caturra", "Catuai", "Gesha",
+  "Maragogype", "Pacamara", "SL28", "SL34", "Heirloom", "Catimor", "Sarchimor",
+  "Mundo Novo", "Acaia", "Mokka", "Java", "Kona", "Peaberry", "Excelsa",
+  "Liberica", "Stenophylla", "Eugenioides", "Racemosa", "Dewevrei",
+  "Sidamo", "Yirgacheffe", "Harrar", "Limu", "Djimmah", "Lekempti",
+  "Mandheling", "Lintong", "Gayo", "Toraja", "Flores", "Bali",
+  "Antigua", "Huehuetenango", "Coban", "Atitlan", "Fraijanes",
+  "Tarrazu", "Naranjo", "Dota", "Brunca", "Orosi",
+  "Supremo", "Excelso", "Huila", "Narino", "Tolima", "Cauca",
+  "Santos", "Mogiana", "Cerrado", "Bahia", "Minas",
+  "Kilimanjaro", "Arusha", "Mbeya", "Kigoma",
+  "Nyeri", "Kirinyaga", "Murang", "Embu", "Kiambu",
+  "Kayanza", "Ngozi", "Muyinga", "Gitega",
+  "Kigali", "Huye", "Nyamasheke", "Rusizi",
+  "Jimma", "Nekemte", "Guji", "Gedeo", "Kaffa",
+  "Oaxaca", "Chiapas", "Veracruz", "Puebla", "Jaltenango",
+  "Chanchamayo", "Junin", "Cusco", "Puno", "Cajamarca",
+  "Loja", "Zamora", "Galapagos",
+  "Matagalpa", "Jinotega", "Segovia",
+  "Copan", "Comayagua", "Marcala", "Opalaca",
+  "Doi Chaang", "Chiang Rai", "Bolaven",
+  "Dak Lak", "Lam Dong", "Dalat",
+  "Sagada", "Benguet", "Cordillera",
+];
+
+let nameIndex = 0;
+
+function nextAgentName(): string {
+  const registry = loadWalletRegistry();
+  const usedNames = new Set(Object.values(registry).map(w => w.name));
+
+  // Find next unused name
+  for (let i = 0; i < BEAN_NAMES.length; i++) {
+    const name = BEAN_NAMES[(nameIndex + i) % BEAN_NAMES.length];
+    if (!usedNames.has(name)) {
+      nameIndex = (nameIndex + i + 1) % BEAN_NAMES.length;
+      return name;
+    }
+  }
+  // All names used — append a number
+  nameIndex++;
+  return `${BEAN_NAMES[nameIndex % BEAN_NAMES.length]}-${Math.floor(nameIndex / BEAN_NAMES.length) + 1}`;
+}
 
 // Load agent .env for defaults
 function loadEnv(): Record<string, string> {
@@ -691,86 +768,139 @@ async function handleTool(
       const results: string[] = [];
       results.push(`=== Simulating ${numAgents} agents entering raffle ${vault} ===\n`);
 
-      // Generate wallets
-      const wallets: { address: string; pk: string; tickets: number }[] = [];
-      for (let i = 0; i < numAgents; i++) {
+      const registry = loadWalletRegistry();
+
+      // Reuse existing unregistered wallets or generate new ones
+      const wallets: { name: string; address: string; pk: string; tickets: number; isNew: boolean }[] = [];
+
+      // First try to reuse registered agents from the registry
+      const existingRegistered = Object.values(registry).filter(w => w.registered);
+      let reused = 0;
+      for (const w of existingRegistered) {
+        if (wallets.length >= numAgents) break;
+        const tickets = Math.floor(Math.random() * maxTickets) + 1;
+        wallets.push({ name: w.name, address: w.address, pk: w.privateKey, tickets, isNew: false });
+        reused++;
+      }
+
+      // Generate fresh wallets for the remainder
+      for (let i = wallets.length; i < numAgents; i++) {
         const output = exec(`"${CAST}" wallet new`);
         const addrMatch = output.match(/Address:\s+(0x[0-9a-fA-F]{40})/);
         const pkMatch = output.match(/Private key:\s+(0x[0-9a-fA-F]{64})/);
         if (!addrMatch || !pkMatch) throw new Error(`Failed to generate wallet ${i}`);
         const tickets = Math.floor(Math.random() * maxTickets) + 1;
-        wallets.push({ address: addrMatch[1], pk: pkMatch[1], tickets });
-      }
+        const name = nextAgentName();
+        wallets.push({ name, address: addrMatch[1], pk: pkMatch[1], tickets, isNew: true });
 
-      results.push(`Generated ${wallets.length} wallets:`);
-      wallets.forEach((w, i) => results.push(`  Agent ${i+1}: ${w.address} (${w.tickets} ticket${w.tickets > 1 ? 's' : ''})`));
+        // Save to registry
+        registry[addrMatch[1].toLowerCase()] = {
+          name,
+          address: addrMatch[1],
+          privateKey: pkMatch[1],
+          registered: false,
+          createdAt: new Date().toISOString(),
+          totalSpent: "0",
+          totalWon: "0",
+          rafflesEntered: 0,
+          rafflesWon: 0,
+        };
+      }
+      saveWalletRegistry(registry);
+
+      if (reused > 0) results.push(`Reusing ${reused} existing agents, creating ${numAgents - reused} new ones:`);
+      else results.push(`Created ${numAgents} new agents:`);
+      wallets.forEach((w) => results.push(`  ${w.name.padEnd(16)} ${w.address} (${w.tickets} ticket${w.tickets > 1 ? 's' : ''})${w.isNew ? '' : ' [reused]'}`));
       results.push('');
 
-      // Fund all wallets with CELO (sequentially from house agent to avoid nonce races)
-      results.push("--- Funding CELO ---");
-      for (const w of wallets) {
-        castSend({ to: w.address, pk, rpc, value: "100000000000000000" }); // 0.1 CELO
-        results.push(`  ${w.address.slice(0,10)}... funded 0.1 CELO`);
+      // Fund new wallets with CELO
+      const newWallets = wallets.filter(w => w.isNew);
+      if (newWallets.length > 0) {
+        results.push("--- Funding new agents with CELO ---");
+        for (const w of newWallets) {
+          castSend({ to: w.address, pk, rpc, value: "100000000000000000" }); // 0.1 CELO
+          results.push(`  ${w.name.padEnd(16)} funded 0.1 CELO`);
+        }
+        results.push('');
       }
-      results.push('');
 
-      // Mint tokens to all wallets (bond + tickets worth)
-      results.push("--- Minting stablecoins ---");
+      // Mint tokens — new agents get bond + tickets, reused agents just get tickets
+      results.push("--- Minting Fake-cUSD ---");
       for (const w of wallets) {
-        const amount = BigInt(bond) + (BigInt(ticketPrice) * BigInt(w.tickets));
+        const bondNeeded = w.isNew ? BigInt(bond) : 0n;
+        const amount = bondNeeded + (BigInt(ticketPrice) * BigInt(w.tickets));
         castSend({
           to: token, sig: "mint(address,uint256)",
           args: [w.address, amount.toString()], pk, rpc,
         });
-        results.push(`  ${w.address.slice(0,10)}... minted ${(Number(amount) / 1e18).toFixed(2)} tokens`);
+        results.push(`  ${w.name.padEnd(16)} minted $${(Number(amount) / 1e18).toFixed(2)}`);
       }
       results.push('');
 
-      // Register each agent (approve bond + registerAgent) — each wallet has nonce 0
-      results.push("--- Registering agents (bond + soulbound NFT) ---");
-      for (let i = 0; i < wallets.length; i++) {
-        const w = wallets[i];
-        const addr = w.address;
-        const agentPk = w.pk;
+      // Register new agents only (approve bond + registerAgent)
+      if (newWallets.length > 0) {
+        results.push("--- Registering new agents (bond + soulbound NFT) ---");
+        for (const w of newWallets) {
+          // Approve bond (nonce 0)
+          castSend({
+            to: token, sig: "approve(address,uint256)",
+            args: [agentReg, bond], pk: w.pk, rpc,
+          });
 
-        // Approve bond (nonce 0)
-        castSend({
-          to: token, sig: "approve(address,uint256)",
-          args: [agentReg, bond], pk: agentPk, rpc,
-        });
+          // Register (nonce 1)
+          castSend({
+            to: agentReg, sig: "registerAgent(string,uint256)",
+            args: [`"https://raffletime.io/agents/${w.name.toLowerCase().replace(/\s+/g, '-')}.json"`, bond], pk: w.pk, rpc,
+          });
 
-        // Register (nonce 1)
-        castSend({
-          to: agentReg, sig: "registerAgent(string,uint256)",
-          args: [`"https://example.com/test-agent-${i+1}.json"`, bond], pk: agentPk, rpc,
-        });
+          // Mark as registered in registry
+          const regEntry = registry[w.address.toLowerCase()];
+          if (regEntry) {
+            regEntry.registered = true;
+            regEntry.totalSpent = (BigInt(regEntry.totalSpent) + BigInt(bond)).toString();
+          }
 
-        results.push(`  Agent ${i+1} registered: ${addr.slice(0,10)}...`);
+          results.push(`  ${w.name.padEnd(16)} registered (bond: $1.00, NFT minted)`);
+        }
+        saveWalletRegistry(registry);
+        results.push('');
       }
-      results.push('');
+
+      // Get beneficiary for this vault
+      let beneficiary = "0x0000000000000000000000000000000000000000";
+      try {
+        const bens = exec(`"${CAST}" call ${vault} "getBeneficiaryOptions()(address[])" --rpc-url ${rpc}`).trim();
+        const benMatch = bens.match(/0x[0-9a-fA-F]{40}/);
+        if (benMatch) beneficiary = benMatch[0];
+      } catch {}
 
       // Enter raffle with each agent
       results.push("--- Entering raffle ---");
-      for (let i = 0; i < wallets.length; i++) {
-        const w = wallets[i];
-        const agentPk = w.pk;
-
+      for (const w of wallets) {
         for (let t = 0; t < w.tickets; t++) {
-          // Approve ticket (nonce increments from register: 2 + 2*t)
+          // Approve ticket
           castSend({
             to: token, sig: "approve(address,uint256)",
-            args: [vault, ticketPrice], pk: agentPk, rpc,
+            args: [vault, ticketPrice], pk: w.pk, rpc,
           });
 
           // Enter raffle
           castSend({
             to: vault, sig: "enterRaffle(address)",
-            args: ["0x0000000000000000000000000000000000000000"], pk: agentPk, rpc,
+            args: [beneficiary], pk: w.pk, rpc,
           });
 
-          results.push(`  Agent ${i+1} bought ticket ${t+1}/${w.tickets}`);
+          // Update registry stats
+          const regEntry = registry[w.address.toLowerCase()];
+          if (regEntry) {
+            regEntry.totalSpent = (BigInt(regEntry.totalSpent) + BigInt(ticketPrice)).toString();
+            regEntry.rafflesEntered++;
+          }
+
+          results.push(`  ${w.name.padEnd(16)} ticket ${t+1}/${w.tickets}`);
         }
       }
+      saveWalletRegistry(registry);
       results.push('');
 
       // Final status
@@ -778,10 +908,11 @@ async function handleTool(
         const state = exec(`"${CAST}" call ${vault} "state()(uint8)" --rpc-url ${rpc}`).trim();
         const pool = exec(`"${CAST}" call ${vault} "totalPool()(uint256)" --rpc-url ${rpc}`).trim();
         const participants = exec(`"${CAST}" call ${vault} "getParticipantCount()(uint256)" --rpc-url ${rpc}`).trim();
+        const poolEth = Number(BigInt(pool.split(" ")[0])) / 1e18;
         results.push(`=== Raffle Status ===`);
-        results.push(`  State: ${state}`);
-        results.push(`  Pool: ${pool} wei`);
-        results.push(`  Participants: ${participants}`);
+        results.push(`  State: OPEN`);
+        results.push(`  Pool: $${poolEth.toFixed(2)}`);
+        results.push(`  Participants: ${participants.split(" ")[0]}`);
       } catch {}
 
       return results.join("\n");

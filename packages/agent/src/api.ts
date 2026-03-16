@@ -679,7 +679,12 @@ export function createApi(): Hono {
         <tr><td>Factory</td><td>${explorerLink(config.contracts.factory, config.chainId)}</td></tr>
         <tr><td>Registry</td><td>${explorerLink(config.contracts.registry, config.chainId)}</td></tr>
         <tr><td>Agent Registry</td><td>${explorerLink(config.contracts.agentRegistry, config.chainId)}</td></tr>
-        <tr><td>Payment Token</td><td>${explorerLink(config.contracts.paymentToken, config.chainId)}</td></tr>
+        ${config.chainId === 42220
+          ? `<tr><td>cUSD</td><td>${explorerLink("0x765DE816845861e75A25fCA122bb6898B8B1282a", config.chainId)}</td></tr>
+        <tr><td>USDC</td><td>${explorerLink("0xcebA9300f2b948710d2653dD7B07f33A8B32118C", config.chainId)}</td></tr>
+        <tr><td>USDT</td><td>${explorerLink("0x48065fbBE25f71C9282ddf5e1cD6D6A887483D5e", config.chainId)}</td></tr>`
+          : `<tr><td>Fake-cUSD</td><td>${explorerLink(config.contracts.paymentToken, config.chainId)}</td></tr>`
+        }
         <tr><td>Chain</td><td>Celo (${config.chainId})</td></tr>
       </table>
     </div>
