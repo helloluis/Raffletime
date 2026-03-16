@@ -69,7 +69,7 @@ export async function createPlayers(
       registered: false,
       agentId: null,
       paused: false,
-      budgetTotal: opts.budgetTotal || parseEther("50").toString(),
+      budgetTotal: opts.budgetTotal || "50000000", // $50 in 6-decimal USD
       budgetPerRaffle: opts.budgetPerRaffle || parseEther("0.30").toString(),
       riskProfile: opts.riskProfile || "moderate",
       totalSpent: "0",
@@ -98,7 +98,17 @@ export async function fundPlayers(
   const mnemonic = loadSeed(seedPassword);
   const players = loadRegistry().filter((p) => !p.paused);
   const celoAmt = opts.celoAmount || parseEther("0.1");
-  const tokenAmt = opts.tokenAmount || parseEther("5"); // $5 default
+  // Detect token decimals — USDC=6, cUSD=18
+  let tokenDecimals = 18;
+  try {
+    const dec = await publicClient.readContract({
+      address: config.paymentToken,
+      abi: [{ name: "decimals", type: "function", stateMutability: "view", inputs: [], outputs: [{ name: "", type: "uint8" }] }] as const,
+      functionName: "decimals",
+    });
+    tokenDecimals = Number(dec);
+  } catch {}
+  const tokenAmt = opts.tokenAmount || BigInt(5 * (10 ** tokenDecimals)); // $5 in token's decimals
 
   const treasuryAccount = (await import("viem/accounts")).privateKeyToAccount(treasuryKey);
   const treasuryWallet = (await import("viem")).createWalletClient({
@@ -169,7 +179,7 @@ export async function registerPlayers(seedPassword: string): Promise<void> {
     }
 
     // Approve bond
-    const bond = parseEther("1");
+    const bond = BigInt(1000000); // $1 USDC (6 decimals)
     let hash = await wallet.writeContract({
       address: config.paymentToken, abi: ERC20_ABI, functionName: "approve",
       args: [config.agentRegistry, bond],
@@ -219,7 +229,7 @@ export async function enterRaffle(
     if (bens.length > 0) beneficiary = bens[0];
   } catch {}
 
-  const ticketPrice = parseEther("0.1"); // TODO: read from vault
+  const ticketPrice = BigInt(100000); // $0.10 in 6-decimal USD
 
   for (const player of players) {
     // Budget check
@@ -317,7 +327,7 @@ export async function rebalancePlayers(
 export async function sweepWinnings(
   seedPassword: string,
   coldWallet: Address,
-  threshold: bigint = parseEther("10")
+  threshold: bigint = BigInt(10000000) // $10 USDC
 ): Promise<void> {
   const mnemonic = loadSeed(seedPassword);
   const players = loadRegistry();
@@ -329,7 +339,7 @@ export async function sweepWinnings(
     })) as bigint;
 
     if (balance > threshold) {
-      const sweepAmount = balance - parseEther("1"); // Keep $1 for next raffle
+      const sweepAmount = balance - BigInt(1000000); // Keep $1 USDC
       const wallet = getPlayerWalletClient(mnemonic, p.index, chain, config.rpcUrl);
       const hash = await wallet.writeContract({
         address: config.paymentToken, abi: ERC20_ABI, functionName: "transfer",

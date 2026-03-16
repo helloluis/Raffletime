@@ -736,22 +736,28 @@ export function createApi(): Hono {
     let initialVault = "";
     let initialPhase = "OPEN";
     try {
-      let currentVault = (await import("./scheduler.js")).getCurrentVault();
-      // In read-only mode, find active raffle from on-chain registry
-      if (!currentVault) {
-        try {
-          const active = await getActiveRaffles();
-          if (active.length > 0) currentVault = active[0] as Address;
-        } catch {}
-      }
-      if (currentVault) {
-        const info = await getRaffleInfo(currentVault);
-        initialPool = formatEther(info.totalPool);
-        initialParticipants = info.participantCount.toString();
-        initialClosesAt = Number(info.closesAt) * 1000;
-        initialState = RaffleState[info.state];
-        initialVault = currentVault;
+      // Try DB first (no RPC calls)
+      const dbRaffles = await db.getRafflesByState("OPEN");
+      if (dbRaffles.length > 0) {
+        const r = dbRaffles[0];
+        initialPool = r.pool || "0";
+        initialParticipants = r.participants?.toString() || "0";
+        initialClosesAt = r.closes_at ? new Date(r.closes_at).getTime() : Date.now() + 3600000;
+        initialState = r.state || "OPEN";
+        initialVault = r.vault;
         initialPhase = (await import("./scheduler.js")).getServerPhase().phase;
+      } else {
+        // Fallback: check scheduler's current vault
+        let currentVault = (await import("./scheduler.js")).getCurrentVault();
+        if (currentVault) {
+          const info = await getRaffleInfo(currentVault);
+          initialPool = (Number(info.totalPool) / 1e6).toString();
+          initialParticipants = info.participantCount.toString();
+          initialClosesAt = Number(info.closesAt) * 1000;
+          initialState = RaffleState[info.state];
+          initialVault = currentVault;
+          initialPhase = (await import("./scheduler.js")).getServerPhase().phase;
+        }
       }
     } catch {}
 
@@ -1360,11 +1366,32 @@ export function createApi(): Hono {
     }
 
     try {
-      const info = await getRaffleInfo(address);
+      // Read from DB first, fallback to chain
+      let stateNum = 0;
+      let totalPoolStr = "0";
+      let participantCountStr = "0";
+      let closesAtTs = 0;
+      const dbRaffle = await db.getRaffle(address);
+      if (dbRaffle) {
+        const stateMap: Record<string, number> = { OPEN: 1, CLOSED: 2, DRAWING: 3, PAYOUT: 4, SETTLED: 5, INVALID: 6 };
+        stateNum = stateMap[dbRaffle.state] || 0;
+        totalPoolStr = dbRaffle.pool || "0";
+        participantCountStr = dbRaffle.participants?.toString() || "0";
+        closesAtTs = dbRaffle.closes_at ? Math.floor(new Date(dbRaffle.closes_at).getTime() / 1000) : 0;
+      } else {
+        // DB miss — read from chain
+        const info = await getRaffleInfo(address);
+        stateNum = info.state;
+        totalPoolStr = (Number(info.totalPool) / 1e6).toString();
+        participantCountStr = info.participantCount.toString();
+        closesAtTs = Number(info.closesAt);
+      }
       const meta = getRaffleMeta(address);
-      const remaining = Number(info.closesAt) - Math.floor(Date.now() / 1000);
+      const remaining = closesAtTs - Math.floor(Date.now() / 1000);
       const timeStr = remaining > 0 ? `${Math.floor(remaining / 60)}m ${remaining % 60}s remaining` : "ENDED";
-      const stateStr = RaffleState[info.state];
+      const stateStr = RaffleState[stateNum] || "UNKNOWN";
+      // Create a compat info object for buildParticipantsHtml
+      const info = { state: stateNum, participantCount: BigInt(participantCountStr), totalPool: BigInt(0), closesAt: BigInt(closesAtTs) };
       const onChainName = meta?.name || await getRaffleName(address);
       const displayName = onChainName || address.slice(0, 10) + "...";
       const typeLabel = meta?.type === "community" ? "Community Raffle" : "House Raffle";
@@ -1410,7 +1437,7 @@ Content-Type: application/json
         actionHtml = `<div class="section"><p>This raffle is currently in ${stateLabel(stateStr)} state.</p></div>`;
       }
 
-      const pool = parseFloat(formatEther(info.totalPool));
+      const pool = parseFloat(totalPoolStr);
 
       const ticketPrice = formatUsd6(config.raffle.ticketPriceUsd6);
 
@@ -1428,7 +1455,7 @@ Content-Type: application/json
       return `<table class="info-table" style="margin-top: 1.5rem">
       <tr><td>Status</td><td>${stateLabel(stateStr)}</td></tr>
       <tr><td>Pool</td><td>$${pool.toFixed(2)}</td></tr>
-      <tr><td>Participants</td><td>${info.participantCount.toString()}</td></tr>
+      <tr><td>Participants</td><td>${participantCountStr}</td></tr>
       <tr><td>Ticket Price</td><td>$${ticketPrice}</td></tr>
       ${startedAt ? `<tr><td>Started</td><td>${fmtDate(startedAt)} UTC</td></tr>` : ''}
       ${info.state === RaffleState.OPEN ? `<tr><td>Closes</td><td>${timeStr}</td></tr>` : ''}
