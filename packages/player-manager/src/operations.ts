@@ -196,10 +196,11 @@ export async function registerPlayers(seedPassword: string): Promise<void> {
 
 export async function enterRaffle(
   seedPassword: string,
-  vault: Address
+  vault: Address,
+  playerSubset?: Player[]
 ): Promise<{ entered: string[]; skipped: string[] }> {
   const mnemonic = loadSeed(seedPassword);
-  const players = getActivePlayers();
+  const players = playerSubset || getActivePlayers();
   const entered: string[] = [];
   const skipped: string[] = [];
 

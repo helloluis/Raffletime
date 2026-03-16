@@ -25,6 +25,7 @@ import {
   enterRaffle, rebalancePlayers, sweepWinnings, getStatus,
 } from "./operations.js";
 import { startMonitor, checkBalances } from "./monitor.js";
+import { startDaemon } from "./daemon.js";
 import { config } from "./config.js";
 
 const [, , command, ...args] = process.argv;
@@ -123,8 +124,13 @@ async function main() {
     case "monitor": {
       console.log("Starting balance monitor...");
       startMonitor();
-      // Keep process alive
       process.on("SIGINT", () => { console.log("\nStopping monitor."); process.exit(0); });
+      break;
+    }
+
+    case "daemon": {
+      await startDaemon();
+      process.on("SIGINT", () => { console.log("\nStopping daemon."); process.exit(0); });
       break;
     }
 
@@ -149,7 +155,7 @@ async function main() {
     }
 
     default:
-      console.log("Commands: init, create, fund, register, enter, rebalance, sweep, status, monitor, pause, resume");
+      console.log("Commands: init, create, fund, register, enter, rebalance, sweep, status, monitor, daemon, pause, resume");
       break;
   }
 }
