@@ -30,15 +30,17 @@ async function sendAlert(message: string): Promise<void> {
   try {
     await fetch(config.alertWebhookUrl, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${config.alertApiKey}`,
+      },
       body: JSON.stringify({
-        source: "raffletime-player-manager",
         message,
-        timestamp: new Date().toISOString(),
+        source: "raffletime",
       }),
     });
   } catch (e) {
-    console.error("[monitor] Alert webhook failed:", e);
+    console.error("[monitor] Alert send failed:", e);
   }
 }
 

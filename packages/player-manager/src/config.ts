@@ -21,8 +21,9 @@ export const config = {
   // Seed encryption password (set via env, never stored in plaintext)
   seedPassword: process.env.SEED_PASSWORD || "",
 
-  // Alerts — generic webhook (POST JSON to this URL)
-  alertWebhookUrl: process.env.ALERT_WEBHOOK_URL || "",
+  // Alerts — Beaniebot push API
+  alertWebhookUrl: process.env.ALERT_WEBHOOK_URL || "https://beanie.cryptoday.live/api/alerts/push",
+  alertApiKey: process.env.ALERT_API_KEY || "",
 
   // Thresholds
   lowBalanceThreshold: process.env.LOW_BALANCE_WEI || "500000000000000000", // $0.50
