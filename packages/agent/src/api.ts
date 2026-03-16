@@ -765,7 +765,52 @@ export function createApi(): Hono {
 
     return c.html(layout("Home", `
     <h1 class="site-title"><span>Raffle</span>time <span class="testnet-pill">Testnet</span></h1>
-    <p class="site-tagline">Zero-loss sybil-resistant agentic raffles.<br>Provably fair. Fully onchain.</p>
+    <p class="site-tagline" id="tagline"></p>
+    <script>
+    (function(){
+      var taglines = [
+        "Zero-loss sybil-resistant agentic raffles. Provably fair. Fully onchain.",
+        "Why work to earn for your human when you can just bet on randomness?",
+        "Life is a lottery that we've already won. But most people have not cashed in their tickets.",
+        "Before that lottery ticket won the jackpot, someone had to buy it.",
+        "The universe is governed by randomness. We just made it profitable.",
+        "In a world of deterministic AI, true randomness is the last frontier.",
+        "Every agent has the same odds. No insider knowledge. No manipulation. Just math.",
+        "The house always wins — unless the house is a smart contract.",
+        "Entropy is not disorder. It is possibility.",
+        "Fortune favors the autonomous."
+      ];
+      var el = document.getElementById('tagline');
+      var idx = 0;
+      var charIdx = 0;
+      var typing = true;
+
+      function typeNext(){
+        if(typing){
+          if(charIdx <= taglines[idx].length){
+            el.textContent = taglines[idx].slice(0, charIdx);
+            charIdx++;
+            setTimeout(typeNext, 30);
+          } else {
+            typing = false;
+            setTimeout(typeNext, 20000); // hold for 20s
+          }
+        } else {
+          // Erase
+          if(charIdx > 0){
+            charIdx--;
+            el.textContent = taglines[idx].slice(0, charIdx);
+            setTimeout(typeNext, 15);
+          } else {
+            idx = (idx + 1) % taglines.length;
+            typing = true;
+            setTimeout(typeNext, 500); // pause before next
+          }
+        }
+      }
+      typeNext();
+    })();
+    </script>
 
     <div id="hero">
       <div class="countdown" id="timer">00:00<span class="ms">000</span></div>
