@@ -761,7 +761,7 @@ export function createApi(): Hono {
       }
     } catch {}
 
-    const ticketPrice = formatCash(formatUsd6(config.raffle.ticketPriceUsd6));
+    const ticketPrice = formatUsd6(config.raffle.ticketPriceUsd6);
 
     return c.html(layout("Home", `
     <h1 class="site-title"><span>Raffle</span>time <span class="testnet-pill">Testnet</span></h1>
@@ -1116,7 +1116,7 @@ export function createApi(): Hono {
       var userAddr = null;
       var isRegistered = false;
       var ticketQty = 1;
-      var PRICE_NUM = ${parseFloat(formatUsd6(config.raffle.ticketPriceUsd6))};
+      var PRICE_NUM = ${Number(config.raffle.ticketPriceUsd6) / 1e6};
 
       window.changeQty = function(delta){
         ticketQty = Math.max(1, Math.min(10, ticketQty + delta));
