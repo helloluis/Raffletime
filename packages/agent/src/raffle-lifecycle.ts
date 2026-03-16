@@ -426,7 +426,7 @@ export async function isRandomnessReady(vault: Address): Promise<boolean> {
   })) as boolean;
 }
 
-export async function completeDraw(vault: Address): Promise<void> {
+export async function completeDraw(vault: Address): Promise<string> {
   console.log("[lifecycle] Completing draw (fetching randomness):", vault);
   const hash = await writeContract({
     address: vault,
@@ -435,6 +435,7 @@ export async function completeDraw(vault: Address): Promise<void> {
   });
   await publicClient.waitForTransactionReceipt({ hash });
   console.log("[lifecycle] Draw completed:", hash);
+  return hash;
 }
 
 export async function distributePrizes(vault: Address): Promise<void> {
@@ -509,7 +510,8 @@ export async function advanceRaffle(vault: Address): Promise<RaffleState> {
       // Two-step: check if randomness oracle has fulfilled, then complete the draw
       const ready = await isRandomnessReady(vault);
       if (ready) {
-        await completeDraw(vault);
+        const drawTx = await completeDraw(vault);
+        try { await db.query("UPDATE raffles SET draw_tx = $1 WHERE vault = $2", [drawTx, vault.toLowerCase()]); } catch {}
         return await getVaultState(vault);
       }
 
@@ -535,7 +537,8 @@ export async function advanceRaffle(vault: Address): Promise<RaffleState> {
             await publicClient.waitForTransactionReceipt({ hash: fulfillHash });
             console.log("[lifecycle] Mock randomness fulfilled:", fulfillHash);
             // Now complete the draw
-            await completeDraw(vault);
+            const drawTx = await completeDraw(vault);
+            try { await db.query("UPDATE raffles SET draw_tx = $1 WHERE vault = $2", [drawTx, vault.toLowerCase()]); } catch {}
             return await getVaultState(vault);
           }
         } catch (e) {

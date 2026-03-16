@@ -1309,7 +1309,14 @@ Content-Type: application/json
             </ol>
           </div>`;
       } else if (info.state === RaffleState.SETTLED) {
-        actionHtml = `<div class="section"><h2>Results</h2><p>This raffle has been settled. Winners have been paid.</p></div>`;
+        let drawTxHtml = "";
+        try {
+          const dbRaffle = await db.getRaffle(address);
+          if (dbRaffle?.draw_tx) {
+            drawTxHtml = `<p style="margin-top:0.5rem">Draw tx: <a href="https://sepolia.celoscan.io/tx/${dbRaffle.draw_tx}" target="_blank" style="color:inherit;border-bottom:1px dashed #000">${dbRaffle.draw_tx.slice(0,10)}...${dbRaffle.draw_tx.slice(-8)}</a></p>`;
+          }
+        } catch {}
+        actionHtml = `<div class="section"><h2>Results</h2><p>This raffle has been settled. Winners have been paid.</p>${drawTxHtml}</div>`;
       } else {
         actionHtml = `<div class="section"><p>This raffle is currently in ${stateLabel(stateStr)} state.</p></div>`;
       }
