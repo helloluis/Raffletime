@@ -63,14 +63,26 @@ async function resolveAgentName(address: Address): Promise<string | null> {
   }
 }
 
-/** Resolve all participants in a raffle and sync to DB */
+/** Resolve all participants in a raffle and sync to DB.
+ *  Skips participants already in DB for this raffle (incremental sync). */
 async function syncParticipants(vault: Address, participantCount: bigint): Promise<void> {
+  // Check how many entries we already have in DB for this raffle
+  let existingEntries: any[] = [];
+  try {
+    existingEntries = await db.getEntriesForRaffle(vault);
+  } catch {}
+
+  const existingAddrs = new Set(existingEntries.map((e: any) => e.agent));
+  const count = Number(participantCount);
+
+  // If DB already has all participants, skip
+  if (existingAddrs.size >= count && count > 0) return;
+
   const ParticipantsAbi = [
     { name: "participants", type: "function", stateMutability: "view", inputs: [{ name: "", type: "uint256" }], outputs: [{ name: "", type: "address" }] },
   ] as const;
 
   const seen = new Map<string, number>();
-  const count = Number(participantCount);
   for (let i = 0; i < count && i < 100; i++) {
     try {
       const addr = (await publicClient.readContract({
@@ -80,11 +92,12 @@ async function syncParticipants(vault: Address, participantCount: bigint): Promi
     } catch { break; }
   }
 
+  // Only resolve new participants
   for (const [addr, tickets] of seen.entries()) {
-    // Resolve name (writes to agents table)
-    await resolveAgentName(addr as Address);
-    // Record entry
-    await db.recordEntry(vault, addr, tickets);
+    if (!existingAddrs.has(addr)) {
+      await resolveAgentName(addr as Address);
+      await db.recordEntry(vault, addr, tickets);
+    }
   }
 }
 
@@ -451,7 +464,7 @@ export async function advanceRaffle(vault: Address): Promise<RaffleState> {
   const info = await getRaffleInfo(vault);
   const now = BigInt(Math.floor(Date.now() / 1000));
 
-  // Sync raffle state to DB
+  // Sync raffle state + participants to DB
   try {
     await db.upsertRaffle({
       vault,
@@ -460,6 +473,10 @@ export async function advanceRaffle(vault: Address): Promise<RaffleState> {
       participants: Number(info.participantCount),
       closesAt: new Date(Number(info.closesAt) * 1000),
     });
+    // Sync participant identities (only new ones — resolved names are cached in DB)
+    if (info.participantCount > 0n && info.state === RaffleState.OPEN) {
+      await syncParticipants(vault, info.participantCount);
+    }
   } catch {}
 
   console.log(
