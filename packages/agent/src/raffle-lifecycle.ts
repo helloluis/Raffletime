@@ -8,6 +8,7 @@ import {
   ERC20Abi,
 } from "./abis.js";
 import { config } from "./config.js";
+import * as db from "./db.js";
 
 // Raffle states matching the Solidity enum
 export enum RaffleState {
@@ -274,6 +275,22 @@ export async function createHouseRaffle(
 
   const vault = (logs[0] as any).args.vault as Address;
   console.log("[lifecycle] House raffle created:", vault, "tx:", hash);
+
+  // Write to DB
+  try {
+    await db.upsertRaffle({
+      vault,
+      name: name || config.raffle.name,
+      type: "house",
+      state: "OPEN",
+      pool: "0",
+      participants: 0,
+      ticketPrice: formatEther(config.raffle.ticketPrice),
+      closesAt: new Date(Date.now() + Number(duration) * 1000),
+      creator: getAgentAddress(),
+    });
+  } catch {}
+
   return vault;
 }
 
@@ -356,6 +373,17 @@ export async function advanceRaffle(vault: Address): Promise<RaffleState> {
   const info = await getRaffleInfo(vault);
   const now = BigInt(Math.floor(Date.now() / 1000));
 
+  // Sync raffle state to DB
+  try {
+    await db.upsertRaffle({
+      vault,
+      state: stateNames[info.state] || "UNKNOWN",
+      pool: formatEther(info.totalPool),
+      participants: Number(info.participantCount),
+      closesAt: new Date(Number(info.closesAt) * 1000),
+    });
+  } catch {}
+
   console.log(
     `[lifecycle] ${vault.slice(0, 10)}... state=${stateNames[info.state]} pool=${formatEther(info.totalPool)} participants=${info.participantCount}`
   );
@@ -420,6 +448,18 @@ export async function advanceRaffle(vault: Address): Promise<RaffleState> {
 
     case RaffleState.PAYOUT:
       await distributePrizes(vault);
+      // Record result in DB
+      try {
+        const winners = (await publicClient.readContract({
+          address: vault, abi: RaffleVaultAbi, functionName: "getWinners",
+        })) as string[];
+        if (winners.length > 0) {
+          // Look up winner name from DB
+          const winnerAgent = await db.getAgent(winners[0]);
+          await db.recordResult(vault, winners[0], winnerAgent?.name || null, formatEther(info.totalPool));
+        }
+        await db.upsertRaffle({ vault, state: "SETTLED", settledAt: new Date() });
+      } catch {}
       return RaffleState.SETTLED;
 
     case RaffleState.SETTLED:
@@ -431,6 +471,7 @@ export async function advanceRaffle(vault: Address): Promise<RaffleState> {
       break;
 
     case RaffleState.INVALID:
+      try { await db.upsertRaffle({ vault, state: "INVALID", settledAt: new Date() }); } catch {}
       // Auto-distribute refunds to all participants
       if (info.participantCount > 0n) {
         try {

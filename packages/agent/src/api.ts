@@ -16,6 +16,7 @@ import { getRaffleMeta, getAllRaffleMeta, type RaffleMeta } from "./raffle-store
 import { layout, stateLabel, formatCash, explorerLink } from "./html.js";
 import { serveStatic } from "@hono/node-server/serve-static";
 import { buildAgentCard } from "./agent-cards.js";
+import * as db from "./db.js";
 
 /** Build HTML table of all raffles (active + settled + invalid) */
 async function buildPrevRafflesHtml(): Promise<string> {
@@ -146,21 +147,22 @@ async function buildParticipantsHtml(vault: Address, info: { participantCount: b
       } catch {}
     }
 
-    // Look up ERC-8004 agent names — use cache first, then on-chain
-    const { getCachedAgent, cacheAgent } = await import("./agent-cache.js");
+    // Look up agent identities — DB first, then on-chain, write back to DB
     const agentNames = new Map<string, string>();
     const housePlayerAddrs = new Set<string>();
 
     for (const addr of seen.keys()) {
-      // Check cache first
-      const cached = getCachedAgent(addr);
-      if (cached) {
-        if (cached.name) agentNames.set(addr, cached.name);
-        if (cached.isHousePlayer) housePlayerAddrs.add(addr);
-        continue;
-      }
+      // Check DB first
+      try {
+        const dbAgent = await db.getAgent(addr);
+        if (dbAgent) {
+          if (dbAgent.name) agentNames.set(addr, dbAgent.name);
+          if (dbAgent.is_house) housePlayerAddrs.add(addr);
+          continue;
+        }
+      } catch {}
 
-      // Cache miss — look up on-chain
+      // DB miss — look up on-chain and write back
       try {
         const agentId = (await publicClient.readContract({
           address: config.contracts.agentRegistry,
@@ -177,7 +179,6 @@ async function buildParticipantsHtml(vault: Address, info: { participantCount: b
             args: [agentId],
           })) as string;
 
-          // Extract name from URI path: .../agents/arabica.json -> Arabica
           let name: string | null = null;
           const nameMatch = uri.match(/\/agents\/([^/.]+)\.json/);
           if (nameMatch) {
@@ -188,12 +189,23 @@ async function buildParticipantsHtml(vault: Address, info: { participantCount: b
           const isHouse = uri.includes("raffletime.io");
           if (isHouse) housePlayerAddrs.add(addr);
 
-          // Cache for future lookups
-          cacheAgent(addr, { name, uri, isHousePlayer: isHouse });
-        } else {
-          // Not registered — cache as unknown
-          cacheAgent(addr, { name: null, uri: null, isHousePlayer: false });
+          // Write to DB
+          try {
+            await db.upsertAgent({
+              address: addr,
+              agentId: Number(agentId),
+              name,
+              uri,
+              isHouse,
+              registered: true,
+            });
+          } catch {}
         }
+      } catch {}
+
+      // Record entry in DB
+      try {
+        await db.recordEntry(vault, addr, seen.get(addr) || 1);
       } catch {}
     }
 
