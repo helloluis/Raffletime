@@ -6,9 +6,17 @@
  * - Zero CELO (can't pay gas)
  */
 
-import { createPublicClient, http, formatEther, defineChain, type Address } from "viem";
+import { createPublicClient, http, defineChain, type Address } from "viem";
 import { loadRegistry, type Player } from "./registry.js";
 import { config } from "./config.js";
+
+function formatUsd6(raw: bigint): string {
+  return (Number(raw) / 1e6).toFixed(2);
+}
+
+// Cooldown: don't re-alert the same player more than once per 6 hours
+const lastAlerted = new Map<string, number>();
+const ALERT_COOLDOWN_MS = 6 * 60 * 60 * 1000;
 
 const chain = defineChain({
   id: config.chainId,
@@ -70,22 +78,28 @@ export async function checkBalances(): Promise<string[]> {
       celoBal = await publicClient.getBalance({ address: addr });
     } catch { continue; }
 
+    const now = Date.now();
+    const lastAlert = lastAlerted.get(player.address) ?? 0;
+    const onCooldown = now - lastAlert < ALERT_COOLDOWN_MS;
+
     // Low token balance
-    if (tokenBal < lowThreshold && player.registered) {
-      const msg = `⚠️ *Low balance*: ${player.name} has $${parseFloat(formatEther(tokenBal)).toFixed(2)} tokens`;
+    if (tokenBal < lowThreshold && player.registered && !onCooldown) {
+      const msg = `⚠️ *Low balance*: ${player.name} has $${formatUsd6(tokenBal)} tokens`;
       alerts.push(msg);
+      lastAlerted.set(player.address, now);
     }
 
-    // High token balance (won big)
+    // High token balance (won big) — no cooldown, always useful to know
     if (tokenBal > highThreshold) {
-      const msg = `💰 *High balance*: ${player.name} has $${parseFloat(formatEther(tokenBal)).toFixed(2)} tokens — consider sweeping`;
+      const msg = `💰 *High balance*: ${player.name} has $${formatUsd6(tokenBal)} tokens — consider sweeping`;
       alerts.push(msg);
     }
 
     // Zero CELO (can't transact)
-    if (celoBal === 0n && player.registered) {
+    if (celoBal === 0n && player.registered && !onCooldown) {
       const msg = `🚨 *No gas*: ${player.name} has 0 CELO — cannot transact`;
       alerts.push(msg);
+      lastAlerted.set(player.address, now);
     }
   }
 
@@ -104,10 +118,9 @@ export function startMonitor(intervalMs: number = 15 * 60 * 1000): void {
       const alerts = await checkBalances();
       if (alerts.length > 0) {
         console.log(`[monitor] ${alerts.length} alert(s):`);
-        for (const alert of alerts) {
-          console.log(`  ${alert}`);
-          await sendAlert(alert);
-        }
+        for (const alert of alerts) console.log(`  ${alert}`);
+        // Send as a single batched message
+        await sendAlert(alerts.join("\n"));
       } else {
         console.log("[monitor] All balances OK");
       }
