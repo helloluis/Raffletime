@@ -873,8 +873,8 @@ export function createApi(): Hono {
             var pl1 = document.getElementById('pool-line');
             if(pl1) pl1.style.display = '';
             resultLine.style.display = 'none';
-            poolEl.textContent = '$0.00';
-            partEl.textContent = '0';
+            poolEl.textContent = d.pool ? '$' + parseFloat(d.pool).toFixed(2) : '$0.00';
+            partEl.textContent = d.participants || '0';
             if(partLink) partLink.href = '/raffles/'+vault;
             document.body.style.transition = 'background-color 2s ease';
             document.body.style.backgroundColor = '#908888';
