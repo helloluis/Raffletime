@@ -87,8 +87,11 @@ export const RaffleVaultAbi = [
       { name: "numWinners", type: "uint256" },
       { name: "winnerShareBps", type: "uint256" },
       { name: "beneficiaryShareBps", type: "uint256" },
-      { name: "agentsOnly", type: "bool" },
+      { name: "beneficiaryOptions", type: "address[]" },
+      { name: "duration", type: "uint256" },
+      { name: "targetPoolSize", type: "uint256" },
       { name: "minUniqueParticipants", type: "uint256" },
+      { name: "agentsOnly", type: "bool" },
     ],
   },
   {

@@ -91,7 +91,7 @@ export function useCusdAllowance(
     abi: ERC20Abi,
     functionName: "allowance",
     args: owner && spender ? [owner, spender] : undefined,
-    query: { enabled: !!owner && !!spender },
+    query: { enabled: !!owner && !!spender, refetchInterval: 10_000 },
   });
 }
 

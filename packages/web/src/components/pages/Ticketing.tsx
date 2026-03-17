@@ -103,13 +103,17 @@ export function Ticketing({ onBack, onSuccess }: TicketingProps) {
     }
   };
 
+  const ZERO_ADDRESS = '0x0000000000000000000000000000000000000000' as Address;
+
   const handleEnter = () => {
-    if (!vault || !selectedCharity) return;
+    if (!vault) return;
+    // Use selected beneficiary, or address(0) if none are registered
+    const beneficiary = (selectedCharity as Address) || ZERO_ADDRESS;
     enterWrite({
       address: vault,
       abi: RaffleVaultAbi,
       functionName: 'enterRaffle',
-      args: [contracts.paymentToken, selectedCharity as Address],
+      args: [contracts.paymentToken, beneficiary],
     });
   };
 
@@ -228,7 +232,8 @@ export function Ticketing({ onBack, onSuccess }: TicketingProps) {
             <Button
               onClick={handleEnter}
               disabled={
-                (!selectedCharity && !!beneficiaryOptions?.length) ||
+                // Require selection only when there are beneficiary options to choose from
+                (!selectedCharity && (beneficiaryOptions?.length ?? 0) > 0) ||
                 isEnterPending ||
                 isEnterConfirming
               }
