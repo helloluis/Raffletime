@@ -4,7 +4,9 @@ pragma solidity ^0.8.24;
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
-import "./interfaces/IRandomnessOracle.sol";
+interface IVRFDispatcher {
+    function requestRandomness(address vault) external returns (uint256 requestId);
+}
 import "./TicketNFT.sol";
 import "./ReceiptSBT.sol";
 import "./AgentRegistry.sol";
@@ -13,7 +15,7 @@ import "./BeneficiaryRegistry.sol";
 /// @title RaffleVault
 /// @notice Core raffle contract deployed as EIP-1167 minimal proxy clone per raffle.
 ///         Manages the full raffle lifecycle: OPEN → CLOSED → DRAWING → PAYOUT → SETTLED.
-///         Uses Witnet Randomness Oracle (two-step: request → fetch).
+///         Uses Chainlink VRF v2.5 via VRFDispatcher (push model: request → callback).
 contract RaffleVault is ReentrancyGuard {
     using SafeERC20 for IERC20;
 
@@ -60,7 +62,7 @@ contract RaffleVault is ReentrancyGuard {
     ReceiptSBT public receiptSBT;
     AgentRegistry public agentRegistry;
     BeneficiaryRegistry public beneficiaryRegistry;
-    IRandomnessOracle public randomnessOracle;
+    address public vrfDispatcher;
     address public factory;
 
     // ============ Raffle state ============
@@ -78,10 +80,6 @@ contract RaffleVault is ReentrancyGuard {
 
     /// @notice Total pool in 6-decimal USD (normalized across all tokens)
     uint256 public totalPool;
-
-    /// @notice Witnet randomness tracking
-    uint256 public randomizeBlock;
-    bool public drawCompleted;
 
     /// @notice Selected winners after drawing
     address[] public winners;
@@ -124,7 +122,7 @@ contract RaffleVault is ReentrancyGuard {
         address receiptSBT_,
         address agentRegistry_,
         address beneficiaryRegistry_,
-        address randomnessOracle_,
+        address vrfDispatcher_,
         address factory_
     ) external {
         require(state == State.UNINITIALIZED, "Already initialized");
@@ -164,7 +162,7 @@ contract RaffleVault is ReentrancyGuard {
         receiptSBT = ReceiptSBT(receiptSBT_);
         agentRegistry = AgentRegistry(agentRegistry_);
         beneficiaryRegistry = BeneficiaryRegistry(beneficiaryRegistry_);
-        randomnessOracle = IRandomnessOracle(randomnessOracle_);
+        vrfDispatcher = vrfDispatcher_;
         factory = factory_;
 
         state = State.OPEN;
@@ -258,11 +256,12 @@ contract RaffleVault is ReentrancyGuard {
         emit RaffleClosed(totalPool, uniqueParticipantCount);
     }
 
-    // ============ DRAWING Phase: Two-step Witnet randomness ============
+    // ============ DRAWING Phase: Chainlink VRF v2.5 (push model) ============
 
-    /// @notice Step 1: Request randomness from Witnet. Transitions to DRAWING state.
-    ///         Must send enough CELO to cover the Witnet fee.
-    function requestDraw() external payable onlyState(State.CLOSED) {
+    /// @notice Request randomness via VRFDispatcher. Transitions to DRAWING state.
+    ///         No native token payment needed — subscription is funded with LINK.
+    ///         Chainlink will call receiveRandomness() on this vault when ready.
+    function requestDraw() external onlyState(State.CLOSED) {
         // Check if raffle is valid
         if (uniqueParticipantCount < params.minUniqueParticipants) {
             _invalidateRaffle("Insufficient unique participants");
@@ -275,7 +274,6 @@ contract RaffleVault is ReentrancyGuard {
             return;
         }
 
-        // Verify enough eligible participants (non-excluded) for numWinners
         uint256 eligibleCount = 0;
         for (uint256 i = 0; i < participants.length; i++) {
             if (!_isExcluded(participants[i])) {
@@ -290,40 +288,16 @@ contract RaffleVault is ReentrancyGuard {
         state = State.DRAWING;
         emit StateTransition(State.CLOSED, State.DRAWING);
 
-        // Request randomness from Witnet
-        uint256 fee = randomnessOracle.estimateRandomizeFee(tx.gasprice);
-        require(msg.value >= fee, "Insufficient CELO for VRF fee");
-        randomnessOracle.randomize{value: fee}();
-        randomizeBlock = block.number;
-
-        // Refund excess
-        if (msg.value > fee) {
-            payable(msg.sender).transfer(msg.value - fee);
-        }
-
-        emit DrawRequested(randomizeBlock);
+        uint256 requestId = IVRFDispatcher(vrfDispatcher).requestRandomness(address(this));
+        emit DrawRequested(requestId);
     }
 
-    /// @notice Step 2: Fetch the random seed from Witnet and select winners.
-    ///         Can be called by anyone once Witnet has fulfilled the randomness.
-    function completeDraw() external onlyState(State.DRAWING) {
-        require(!drawCompleted, "Draw already completed");
-        require(randomizeBlock > 0, "No randomness requested");
-
-        // Fetch randomness — reverts if not yet available
-        bytes32 randomSeed = randomnessOracle.fetchRandomnessAfter(randomizeBlock);
-        uint256 randomWord = uint256(randomSeed);
-        drawCompleted = true;
-
-        emit DrawCompleted(randomWord);
-
-        _selectWinners(randomWord);
-    }
-
-    /// @notice Check if the Witnet randomness is ready to be fetched.
-    function isRandomnessReady() external view returns (bool) {
-        if (randomizeBlock == 0) return false;
-        return randomnessOracle.isRandomized(randomizeBlock);
+    /// @notice Called by VRFDispatcher with the fulfilled random seed.
+    ///         Selects winners and advances to PAYOUT immediately.
+    function receiveRandomness(uint256 seed) external onlyState(State.DRAWING) {
+        require(msg.sender == vrfDispatcher, "Only VRFDispatcher");
+        emit DrawCompleted(seed);
+        _selectWinners(seed);
     }
 
     // ============ Winner selection (shared logic) ============
@@ -508,6 +482,4 @@ contract RaffleVault is ReentrancyGuard {
         return participants.length;
     }
 
-    /// @notice Allow the vault to receive CELO for VRF fees
-    receive() external payable {}
 }

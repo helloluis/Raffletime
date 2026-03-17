@@ -6,6 +6,7 @@ import {
   RaffleRegistryAbi,
   AgentRegistryAbi,
   ERC20Abi,
+  MockVRFDispatcherAbi,
 } from "./abis.js";
 import { config } from "./config.js";
 import * as db from "./db.js";
@@ -403,40 +404,46 @@ export async function closeRaffle(vault: Address): Promise<void> {
   console.log("[lifecycle] Raffle closed:", hash);
 }
 
+/** Request draw and auto-fulfill if MOCK_VRF_DISPATCHER_ADDRESS is set (testnet only).
+ *  With real Chainlink VRF, fulfillment is automatic via callback — no follow-up needed. */
 export async function requestDraw(vault: Address): Promise<void> {
   console.log("[lifecycle] Requesting draw:", vault);
-  const wallet = getWalletClient();
-  // requestDraw is payable — send ETH for the randomness oracle fee
-  // MockRandomness fee is 0, real oracle fee is small
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const hash = await wallet.writeContract({
-    address: vault,
-    abi: RaffleVaultAbi,
-    functionName: "requestDraw",
-    value: 100000000000000000n, // 0.1 ETH — overpay, excess is refunded
-  } as any);
-  await publicClient.waitForTransactionReceipt({ hash });
-  console.log("[lifecycle] Draw requested:", hash);
-}
-
-export async function isRandomnessReady(vault: Address): Promise<boolean> {
-  return (await publicClient.readContract({
-    address: vault,
-    abi: RaffleVaultAbi,
-    functionName: "isRandomnessReady",
-  })) as boolean;
-}
-
-export async function completeDraw(vault: Address): Promise<string> {
-  console.log("[lifecycle] Completing draw (fetching randomness):", vault);
   const hash = await writeContract({
     address: vault,
     abi: RaffleVaultAbi,
-    functionName: "completeDraw",
+    functionName: "requestDraw",
   });
-  await publicClient.waitForTransactionReceipt({ hash });
-  console.log("[lifecycle] Draw completed:", hash);
-  return hash;
+  const receipt = await publicClient.waitForTransactionReceipt({ hash });
+  console.log("[lifecycle] Draw requested:", hash);
+
+  // Testnet only: auto-fulfill via MockVRFDispatcher
+  const mockAddr = process.env.MOCK_VRF_DISPATCHER_ADDRESS as Address | undefined;
+  if (!mockAddr) return;
+
+  try {
+    // Parse DrawRequested event to get the VRF requestId
+    const DrawRequestedAbi = [{
+      name: "DrawRequested", type: "event" as const,
+      inputs: [{ name: "requestId", type: "uint256", indexed: false }],
+    }];
+    const logs = parseEventLogs({ abi: DrawRequestedAbi, logs: receipt.logs });
+    if (logs.length === 0) {
+      console.log("[lifecycle] DrawRequested event not found — raffle may have gone INVALID");
+      return;
+    }
+    const requestId = (logs[0] as any).args.requestId as bigint;
+    console.log(`[lifecycle] Auto-fulfilling mock VRF requestId=${requestId}...`);
+    const fulfillHash = await writeContract({
+      address: mockAddr,
+      abi: MockVRFDispatcherAbi,
+      functionName: "fulfillRequest",
+      args: [requestId],
+    });
+    await publicClient.waitForTransactionReceipt({ hash: fulfillHash });
+    console.log("[lifecycle] Mock VRF fulfilled:", fulfillHash);
+  } catch (e) {
+    console.log("[lifecycle] Mock VRF auto-fulfill failed:", String(e).slice(0, 120));
+  }
 }
 
 export async function distributePrizes(vault: Address): Promise<void> {
@@ -509,49 +516,12 @@ export async function advanceRaffle(vault: Address): Promise<RaffleState> {
       await requestDraw(vault);
       return await getVaultState(vault);
 
-    case RaffleState.DRAWING: {
-      // Two-step: check if randomness oracle has fulfilled, then complete the draw
-      const ready = await isRandomnessReady(vault);
-      if (ready) {
-        const drawTx = await completeDraw(vault);
-        try { await db.query("UPDATE raffles SET draw_tx = $1 WHERE vault = $2", [drawTx, vault.toLowerCase()]); } catch {}
-        return await getVaultState(vault);
-      }
-
-      // Auto-fulfill MockRandomness on testnet if configured
-      const mockAddr = process.env.MOCK_RANDOMNESS_ADDRESS;
-      if (mockAddr) {
-        try {
-          const randBlock = (await publicClient.readContract({
-            address: vault,
-            abi: RaffleVaultAbi,
-            functionName: "randomizeBlock",
-          })) as bigint;
-
-          if (randBlock > 0n) {
-            console.log(`[lifecycle] Auto-fulfilling mock randomness for block ${randBlock}...`);
-            const MockAbi = [{ name: "fulfillBlock", type: "function", stateMutability: "nonpayable", inputs: [{ name: "blockNumber", type: "uint256" }], outputs: [] }] as const;
-            const fulfillHash = await writeContract({
-              address: mockAddr as Address,
-              abi: MockAbi,
-              functionName: "fulfillBlock",
-              args: [randBlock],
-            });
-            await publicClient.waitForTransactionReceipt({ hash: fulfillHash });
-            console.log("[lifecycle] Mock randomness fulfilled:", fulfillHash);
-            // Now complete the draw
-            const drawTx = await completeDraw(vault);
-            try { await db.query("UPDATE raffles SET draw_tx = $1 WHERE vault = $2", [drawTx, vault.toLowerCase()]); } catch {}
-            return await getVaultState(vault);
-          }
-        } catch (e) {
-          console.log("[lifecycle] Mock fulfill failed (may already be fulfilled):", String(e).slice(0, 100));
-        }
-      }
-
-      console.log("[lifecycle] Waiting for randomness oracle...");
+    case RaffleState.DRAWING:
+      // Chainlink VRF v2.5 push model: VRFDispatcher.fulfillRandomWords() calls
+      // vault.receiveRandomness() which auto-advances to PAYOUT. Nothing to do here.
+      // On testnet, auto-fulfill already happens inline in requestDraw() above.
+      console.log("[lifecycle] Waiting for Chainlink VRF callback...");
       break;
-    }
 
     case RaffleState.PAYOUT:
       await distributePrizes(vault);

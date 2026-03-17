@@ -148,30 +148,9 @@ export const RaffleVaultAbi = [
   {
     name: "requestDraw",
     type: "function",
-    stateMutability: "payable",
-    inputs: [],
-    outputs: [],
-  },
-  {
-    name: "completeDraw",
-    type: "function",
     stateMutability: "nonpayable",
     inputs: [],
     outputs: [],
-  },
-  {
-    name: "isRandomnessReady",
-    type: "function",
-    stateMutability: "view",
-    inputs: [],
-    outputs: [{ name: "", type: "bool" }],
-  },
-  {
-    name: "randomizeBlock",
-    type: "function",
-    stateMutability: "view",
-    inputs: [],
-    outputs: [{ name: "", type: "uint256" }],
   },
   {
     name: "distributePrizes",
@@ -295,6 +274,31 @@ export const AgentRegistryAbi = [
     stateMutability: "view",
     inputs: [],
     outputs: [{ name: "", type: "uint256" }],
+  },
+] as const;
+
+export const MockVRFDispatcherAbi = [
+  {
+    name: "fulfillRequest",
+    type: "function",
+    stateMutability: "nonpayable",
+    inputs: [{ name: "requestId", type: "uint256" }],
+    outputs: [],
+  },
+  {
+    name: "nextRequestId",
+    type: "function",
+    stateMutability: "view",
+    inputs: [],
+    outputs: [{ name: "", type: "uint256" }],
+  },
+  {
+    name: "RandomnessRequested",
+    type: "event",
+    inputs: [
+      { name: "requestId", type: "uint256", indexed: true },
+      { name: "vault", type: "address", indexed: true },
+    ],
   },
 ] as const;
 

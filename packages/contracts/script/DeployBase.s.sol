@@ -9,13 +9,16 @@ import "../src/AgentRegistry.sol";
 import "../src/BeneficiaryRegistry.sol";
 import "../src/TicketNFT.sol";
 import "../src/ReceiptSBT.sol";
-import {MockRandomness} from "../src/mocks/MockRandomness.sol";
+import "../src/VRFDispatcher.sol";
 // MockERC20 not used in final deployment
 
 /// @title DeployBase
 /// @notice Deploys the full RaffleTime protocol to Base Sepolia testnet.
 ///         Uses Circle USDC on Base Sepolia as the primary payment token.
-///         Uses MockRandomness for VRF on testnet.
+///         Uses real Chainlink VRF v2.5 with funded subscription.
+///
+/// IMPORTANT: After deployment, add the VRFDispatcher address as a consumer
+///            on your subscription at vrf.chain.link.
 ///
 /// Usage:
 ///   forge script script/DeployBase.s.sol:DeployBase \
@@ -63,9 +66,22 @@ contract DeployBase is Script {
         RaffleRegistry raffleRegistry = new RaffleRegistry();
         console.log("RaffleRegistry:", address(raffleRegistry));
 
-        // 3. Deploy mock VRF (testnet only — mainnet uses Witnet or Chainlink VRF on Base)
-        MockRandomness mockRandomness = new MockRandomness();
-        console.log("MockRandomness:", address(mockRandomness));
+        // 3. Deploy VRFDispatcher with Chainlink VRF v2.5
+        //    Coordinator and key hash: https://docs.chain.link/vrf/v2-5/supported-networks#base-sepolia-testnet
+        address vrfCoordinator = 0x5C210eF41CD1a72de73bF76eC39637bB0d3d7BEE; // Base Sepolia VRF v2.5
+        bytes32 keyHash = 0x9e9e46732b32662b9adc6f3abdf6c5e926a666d174a4d6b8e39c4cca76a38897; // 500 gwei lane
+        uint256 subscriptionId = 73946797020157857277221563581040345401843865455304900649818093121317090894752;
+        uint32 callbackGasLimit = 500000; // generous limit for winner selection + payout logic
+
+        // factory_ is set to deployer initially; updated after factory is deployed via setFactory()
+        VRFDispatcher vrfDispatcher = new VRFDispatcher(
+            vrfCoordinator,
+            subscriptionId,
+            keyHash,
+            callbackGasLimit,
+            deployer // temporary factory; updated below
+        );
+        console.log("VRFDispatcher:", address(vrfDispatcher));
 
         // 4. Deploy vault implementation
         RaffleVault vaultImpl = new RaffleVault();
@@ -81,7 +97,7 @@ contract DeployBase is Script {
             address(agentRegistry),
             address(beneficiaryRegistry),
             address(raffleRegistry),
-            address(mockRandomness),
+            address(vrfDispatcher),
             deployer
         );
         console.log("RaffleFactory:", address(factory));
@@ -91,6 +107,7 @@ contract DeployBase is Script {
         agentRegistry.authorizeFactory(address(factory));
         ticketNFT.transferOwnership(address(factory));
         receiptSBT.transferOwnership(address(factory));
+        vrfDispatcher.setFactory(address(factory)); // allow factory to call authorizeVault()
 
         // 7. Register deployer as test beneficiary
         beneficiaryRegistry.registerBeneficiary(
@@ -112,7 +129,10 @@ contract DeployBase is Script {
         console.log("AGENT_REGISTRY_ADDRESS=%s", vm.toString(address(agentRegistry)));
         console.log("PAYMENT_TOKEN_ADDRESS=%s", vm.toString(usdc));
         console.log("USDT_ADDRESS=%s", vm.toString(usdt));
-        console.log("RANDOMNESS_ORACLE_ADDRESS=%s", vm.toString(address(mockRandomness)));
+        console.log("VRF_DISPATCHER_ADDRESS=%s", vm.toString(address(vrfDispatcher)));
         console.log("==================================");
+        console.log("\n*** IMPORTANT: Add VRFDispatcher as a consumer on your subscription ***");
+        console.log("*** Go to vrf.chain.link > your subscription > Add Consumer ***");
+        console.log("*** Consumer address: %s ***", vm.toString(address(vrfDispatcher)));
     }
 }

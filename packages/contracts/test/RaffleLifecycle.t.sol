@@ -9,7 +9,7 @@ import "../src/AgentRegistry.sol";
 import "../src/BeneficiaryRegistry.sol";
 import "../src/TicketNFT.sol";
 import "../src/ReceiptSBT.sol";
-import {MockRandomness} from "../src/mocks/MockRandomness.sol";
+import {MockVRFDispatcher} from "../src/mocks/MockVRFDispatcher.sol";
 import "../src/mocks/MockERC20.sol";
 
 /// @title RaffleLifecycleTest
@@ -17,7 +17,7 @@ import "../src/mocks/MockERC20.sol";
 contract RaffleLifecycleTest is Test {
     MockERC20 usdc6;   // 6-decimal mock (like USDC)
     MockERC20 cusd18;  // 18-decimal mock (like cUSD)
-    MockRandomness mockRandom;
+    MockVRFDispatcher mockVRF;
     BeneficiaryRegistry beneficiaryRegistry;
     AgentRegistry agentRegistry;
     TicketNFT ticketNFT;
@@ -41,7 +41,7 @@ contract RaffleLifecycleTest is Test {
         cusd18 = new MockERC20();
         vm.label(address(cusd18), "cUSD18");
 
-        mockRandom = new MockRandomness();
+        mockVRF = new MockVRFDispatcher();
 
         // Deploy protocol contracts
         beneficiaryRegistry = new BeneficiaryRegistry();
@@ -69,7 +69,7 @@ contract RaffleLifecycleTest is Test {
             address(agentRegistry),
             address(beneficiaryRegistry),
             address(raffleRegistry),
-            address(mockRandom),
+            address(mockVRF),
             protocolFee
         );
 
@@ -128,7 +128,7 @@ contract RaffleLifecycleTest is Test {
         address vault = factory.createRaffle(params);
         vm.stopPrank();
 
-        RaffleVault rv = RaffleVault(payable(vault));
+        RaffleVault rv = RaffleVault(vault);
         assertEq(uint256(rv.state()), 1); // OPEN
 
         // Agent 1 enters with USDC (6 decimals): $0.10 = 100000 units
@@ -162,13 +162,9 @@ contract RaffleLifecycleTest is Test {
         rv.requestDraw();
         assertEq(uint256(rv.state()), 3); // DRAWING
 
-        // Fulfill randomness
-        uint256 drawBlock = rv.randomizeBlock();
-        mockRandom.fulfillBlock(drawBlock);
-
-        // Complete draw
-        rv.completeDraw();
-        assertEq(uint256(rv.state()), 4); // PAYOUT
+        // Fulfill randomness via mock dispatcher (requestId=1 for first request)
+        mockVRF.fulfillRequest(1);
+        assertEq(uint256(rv.state()), 4); // PAYOUT — callback auto-advances state
 
         address[] memory winners = rv.getWinners();
         assertEq(winners.length, 1);
@@ -203,16 +199,16 @@ contract RaffleLifecycleTest is Test {
         // Only 1 agent enters
         vm.startPrank(agent1);
         usdc6.approve(vault, 100000);
-        RaffleVault(payable(vault)).enterRaffle(address(usdc6), address(0));
+        RaffleVault(vault).enterRaffle(address(usdc6), address(0));
         vm.stopPrank();
 
         // Close
         vm.warp(block.timestamp + 3601);
-        RaffleVault(payable(vault)).closeRaffle();
+        RaffleVault(vault).closeRaffle();
 
         // Request draw — should invalidate (1 < minUniqueParticipants)
-        RaffleVault(payable(vault)).requestDraw();
-        assertEq(uint256(RaffleVault(payable(vault)).state()), 6); // INVALID
+        RaffleVault(vault).requestDraw();
+        assertEq(uint256(RaffleVault(vault).state()), 6); // INVALID
     }
 
     function test_mixedTokenPrizes() public {
@@ -241,20 +237,20 @@ contract RaffleLifecycleTest is Test {
         // Agent 1: USDC
         vm.startPrank(agent1);
         usdc6.approve(vault, 100000);
-        RaffleVault(payable(vault)).enterRaffle(address(usdc6), address(0));
+        RaffleVault(vault).enterRaffle(address(usdc6), address(0));
         vm.stopPrank();
 
         // Agent 2: USDC
         vm.startPrank(agent2);
         usdc6.approve(vault, 100000);
-        RaffleVault(payable(vault)).enterRaffle(address(usdc6), address(0));
+        RaffleVault(vault).enterRaffle(address(usdc6), address(0));
         vm.stopPrank();
 
         // Agent 3: cUSD (18 decimals) — buy 2 tickets to meet minTickets
         vm.startPrank(agent3);
         cusd18.approve(vault, 2e17);
-        RaffleVault(payable(vault)).enterRaffle(address(cusd18), address(0));
-        RaffleVault(payable(vault)).enterRaffle(address(cusd18), address(0));
+        RaffleVault(vault).enterRaffle(address(cusd18), address(0));
+        RaffleVault(vault).enterRaffle(address(cusd18), address(0));
         vm.stopPrank();
 
         // Vault should have both USDC and cUSD
@@ -263,11 +259,10 @@ contract RaffleLifecycleTest is Test {
 
         // Close + draw + distribute
         vm.warp(block.timestamp + 3601);
-        RaffleVault rv = RaffleVault(payable(vault));
+        RaffleVault rv = RaffleVault(vault);
         rv.closeRaffle();
         rv.requestDraw();
-        mockRandom.fulfillBlock(rv.randomizeBlock());
-        rv.completeDraw();
+        mockVRF.fulfillRequest(1);
         rv.distributePrizes();
 
         assertEq(uint256(rv.state()), 5); // SETTLED

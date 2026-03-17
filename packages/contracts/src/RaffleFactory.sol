@@ -13,6 +13,10 @@ import "./ReceiptSBT.sol";
 import "./AgentRegistry.sol";
 import "./BeneficiaryRegistry.sol";
 
+interface IVRFDispatcherAuth {
+    function authorizeVault(address vault) external;
+}
+
 /// @title RaffleFactory
 /// @notice Deploys new RaffleVault clones (EIP-1167 minimal proxies).
 ///         Takes a dynamic ARO deposit (sqrt-scaled by targetPoolSize), validates
@@ -36,7 +40,7 @@ contract RaffleFactory is Ownable {
     AgentRegistry public agentRegistry;
     BeneficiaryRegistry public beneficiaryRegistry;
     RaffleRegistry public raffleRegistry;
-    address public anyrand;
+    address public vrfDispatcher;
 
     /// @notice Protocol fee recipient
     address public protocolFeeRecipient;
@@ -80,7 +84,7 @@ contract RaffleFactory is Ownable {
         address agentRegistry_,
         address beneficiaryRegistry_,
         address raffleRegistry_,
-        address anyrand_,
+        address vrfDispatcher_,
         address protocolFeeRecipient_
     ) Ownable(msg.sender) {
         require(acceptedTokens_.length > 0, "Need at least 1 token");
@@ -96,7 +100,7 @@ contract RaffleFactory is Ownable {
         agentRegistry = AgentRegistry(agentRegistry_);
         beneficiaryRegistry = BeneficiaryRegistry(beneficiaryRegistry_);
         raffleRegistry = RaffleRegistry(raffleRegistry_);
-        anyrand = anyrand_;
+        vrfDispatcher = vrfDispatcher_;
         protocolFeeRecipient = protocolFeeRecipient_;
     }
 
@@ -121,7 +125,7 @@ contract RaffleFactory is Ownable {
         vault = vaultImplementation.clone();
 
         // Initialize the vault
-        RaffleVault(payable(vault)).initialize(
+        RaffleVault(vault).initialize(
             params_,
             msg.sender,
             acceptedTokens,
@@ -130,7 +134,7 @@ contract RaffleFactory is Ownable {
             address(receiptSBT),
             address(agentRegistry),
             address(beneficiaryRegistry),
-            anyrand,
+            vrfDispatcher,
             address(this)
         );
 
@@ -138,6 +142,7 @@ contract RaffleFactory is Ownable {
         ticketNFT.authorizeMinter(vault);
         receiptSBT.authorizeMinter(vault);
         agentRegistry.authorizeVault(vault);
+        IVRFDispatcherAuth(vrfDispatcher).authorizeVault(vault);
 
         // Register in the global registry
         uint256 closesAt = block.timestamp + params_.duration;
@@ -155,7 +160,7 @@ contract RaffleFactory is Ownable {
     ///         - INVALID: 50% to ARO, 50% to protocol
     /// @param vault The raffle vault address
     function claimDeposit(address vault) external {
-        RaffleVault raffleVault = RaffleVault(payable(vault));
+        RaffleVault raffleVault = RaffleVault(vault);
         RaffleVault.State vaultState = raffleVault.state();
 
         require(
@@ -188,7 +193,7 @@ contract RaffleFactory is Ownable {
     function sweepDeposit(address vault) external {
         require(aroDeposits[vault] > 0, "Nothing to sweep");
 
-        RaffleVault raffleVault = RaffleVault(payable(vault));
+        RaffleVault raffleVault = RaffleVault(vault);
         RaffleVault.State vaultState = raffleVault.state();
 
         // Must be finalized (SETTLED or INVALID)
