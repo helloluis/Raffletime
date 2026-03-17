@@ -1438,8 +1438,6 @@ export function createApi(): Hono {
         closesAtTs = Number(info.closesAt);
       }
       const meta = getRaffleMeta(address);
-      const remaining = closesAtTs - Math.floor(Date.now() / 1000);
-      const timeStr = remaining > 0 ? `${Math.floor(remaining / 60)}m ${remaining % 60}s remaining` : "ENDED";
       const stateStr = RaffleState[stateNum] || "UNKNOWN";
       // Create a compat info object for buildParticipantsHtml
       const info = { state: stateNum, participantCount: BigInt(participantCountStr), totalPool: BigInt(0), closesAt: BigInt(closesAtTs) };
@@ -1502,20 +1500,41 @@ Content-Type: application/json
       const dbRaffle = await db.getRaffle(address).catch(() => null);
       const startedAt = dbRaffle?.created_at ? new Date(dbRaffle.created_at) : null;
       const endedAt = dbRaffle?.settled_at ? new Date(dbRaffle.settled_at) : null;
-      const fmtDate = (d: Date) => `${String(d.getMonth()+1).padStart(2,'0')}/${String(d.getDate()).padStart(2,'0')} ${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}:${String(d.getSeconds()).padStart(2,'0')}`;
       return `<table class="info-table" style="margin-top: 1.5rem">
       <tr><td>Status</td><td>${stateLabel(stateStr)}</td></tr>
       <tr><td>Pool</td><td>$${pool.toFixed(2)}</td></tr>
       <tr><td>Participants</td><td>${participantCountStr}</td></tr>
-      <tr><td>Ticket Price</td><td>$${ticketPrice}</td></tr>
-      ${startedAt ? `<tr><td>Started</td><td>${fmtDate(startedAt)} UTC</td></tr>` : ''}
-      ${info.state === RaffleState.OPEN ? `<tr><td>Closes</td><td>${timeStr}</td></tr>` : ''}
-      ${endedAt ? `<tr><td>Ended</td><td>${fmtDate(endedAt)} UTC</td></tr>` : ''}
+      <tr><td>Ticket Price</td><td>${ticketPrice}</td></tr>
+      ${startedAt ? `<tr><td>Started</td><td><span class="local-time" data-ts="${startedAt.getTime()}">${startedAt.toISOString()}</span></td></tr>` : ''}
+      ${info.state === RaffleState.OPEN ? `<tr><td>Closes</td><td><span id="closes-countdown" data-closes="${closesAtTs * 1000}"></span></td></tr>` : ''}
+      ${endedAt ? `<tr><td>Ended</td><td><span class="local-time" data-ts="${endedAt.getTime()}">${endedAt.toISOString()}</span></td></tr>` : ''}
       <tr><td>Vault</td><td>${explorerLink(address, config.chainId)}</td></tr>
     </table>`;
     })()}
 
-    ${info.state === RaffleState.OPEN ? `<p style="margin: 1.5rem 0"><a href="/raffles/${address}" class="cta">Join $${ticketPrice}</a></p>` : ""}
+    ${info.state === RaffleState.OPEN ? `<p style="margin: 1.5rem 0"><a href="/raffles/${address}" class="cta">Join ${ticketPrice}</a></p>` : ""}
+
+    <script>
+    // Live countdown
+    var countdownEl = document.getElementById('closes-countdown');
+    if (countdownEl) {
+      var closesAt = parseInt(countdownEl.dataset.closes);
+      function updateCountdown() {
+        var diff = Math.max(0, closesAt - Date.now());
+        if (diff === 0) { countdownEl.textContent = 'ENDED'; return; }
+        var m = Math.floor(diff / 60000), s = Math.floor((diff % 60000) / 1000);
+        countdownEl.textContent = m + 'm ' + String(s).padStart(2,'0') + 's remaining';
+      }
+      updateCountdown();
+      setInterval(updateCountdown, 1000);
+    }
+    // Local time formatting
+    document.querySelectorAll('.local-time').forEach(function(el) {
+      var ts = parseInt(el.dataset.ts);
+      var d = new Date(ts);
+      el.textContent = d.toLocaleString(undefined, { month:'2-digit', day:'2-digit', hour:'2-digit', minute:'2-digit', second:'2-digit' });
+    });
+    </script>
 
     ${actionHtml}
 
