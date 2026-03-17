@@ -250,7 +250,16 @@ async function orphanCheck(): Promise<void> {
       const vault = row.vault as Address;
       if (vault === currentVault) continue; // scheduler owns this one
 
-      const info = await getRaffleInfo(vault);
+      let info;
+      try {
+        info = await getRaffleInfo(vault);
+      } catch {
+        // Contract returns no data — stale DB entry from old deployment, mark invalid
+        await db.upsertRaffle({ vault, state: "INVALID", settledAt: new Date() });
+        console.log(`[scheduler] Orphan check: marked stale vault as INVALID: ${vault}`);
+        continue;
+      }
+
       if (info.state !== RaffleState.OPEN) {
         // Already advanced on-chain — sync DB state
         await db.upsertRaffle({ vault, state: stateNames[info.state] || "UNKNOWN" });

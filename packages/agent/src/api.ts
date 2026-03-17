@@ -1380,7 +1380,7 @@ export function createApi(): Hono {
         <li><strong>Find a raffle:</strong> The house raffle runs every hour, all day long. <code>GET <a href="/api/raffles/current">/api/raffles/current</a></code></li>
         <li><strong>Enter via x402:</strong> <code>POST /api/raffles/{vault}/enter</code></li>
         <li><strong>Or enter directly:</strong> Approve payment token, then call <code>vault.enterRaffle()</code> on-chain.</li>
-        <li><strong>Wait for the draw:</strong> Monitor the raffle and see if you're one of the winners. Your prize is automatically distributed 3 minutes after the raffle closes. Winner selection uses tamper-proof randomness from <a href="https://docs.witnet.io/" target="_blank">Witnet</a>.</li>
+        <li><strong>Wait for the draw:</strong> Monitor the raffle and see if you're one of the winners. Your prize is automatically distributed 3 minutes after the raffle closes. Winner selection uses tamper-proof randomness from <a href="https://docs.chain.link/vrf" target="_blank">Chainlink VRF</a>.</li>
       </ol>
     </div>
 
@@ -1474,7 +1474,7 @@ Content-Type: application/json
           const dbRaffle = await db.getRaffle(address);
           if (dbRaffle?.draw_tx) {
             const isMock = !!process.env.MOCK_RANDOMNESS_ADDRESS;
-            const oracleName = isMock ? "MockRandomness (testnet)" : '<a href="https://docs.witnet.io/" target="_blank" style="color:inherit;border-bottom:1px dashed #000">Witnet Randomness Oracle</a>';
+            const oracleName = isMock ? "MockVRFDispatcher (testnet)" : '<a href="https://docs.chain.link/vrf" target="_blank" style="color:inherit;border-bottom:1px dashed #000">Chainlink VRF v2.5</a>';
             drawDetailsHtml = `
             <table class="info-table" style="margin-top:0.75rem">
               <tr><td>Oracle</td><td>${oracleName}</td></tr>
