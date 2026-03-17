@@ -69,7 +69,7 @@ contract DeployBase is Script {
         // 3. Deploy VRFDispatcher with Chainlink VRF v2.5
         //    Coordinator and key hash: https://docs.chain.link/vrf/v2-5/supported-networks#base-sepolia-testnet
         address vrfCoordinator = 0x5C210eF41CD1a72de73bF76eC39637bB0d3d7BEE; // Base Sepolia VRF v2.5
-        bytes32 keyHash = 0x9e9e46732b32662b9adc6f3abdf6c5e926a666d174a4d6b8e39c4cca76a38897; // 500 gwei lane
+        bytes32 keyHash = 0x9e1344a1247c8a1785d0a4681a27152bffdb43666ae5bf7d14d24a5efd44bf71; // 30 gwei lane (only lane on Base Sepolia)
         uint256 subscriptionId = 73946797020157857277221563581040345401843865455304900649818093121317090894752;
         uint32 callbackGasLimit = 500000; // generous limit for winner selection + payout logic
 

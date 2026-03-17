@@ -117,4 +117,14 @@ contract VRFDispatcher is VRFConsumerBaseV2Plus {
     function setCallbackGasLimit(uint32 callbackGasLimit_) external onlyOwner {
         callbackGasLimit = callbackGasLimit_;
     }
+
+    // ============ Emergency recovery ============
+
+    /// @notice Manually fulfill a stuck vault with a chosen seed. Owner only.
+    ///         Use when Chainlink fails to deliver (wrong key hash, oracle outage, etc.)
+    function emergencyFulfill(address vault, uint256 seed) external onlyOwner {
+        require(vault != address(0), "Zero address");
+        IRaffleVaultVRF(vault).receiveRandomness(seed);
+        emit RandomnessFulfilled(0, vault, seed);
+    }
 }
