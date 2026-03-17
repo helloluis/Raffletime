@@ -7,7 +7,7 @@ import {
   type WalletClient,
   type Chain,
 } from "viem";
-import { privateKeyToAccount } from "viem/accounts";
+import { privateKeyToAccount, nonceManager } from "viem/accounts";
 import { base, baseSepolia } from "viem/chains";
 import { config } from "./config.js";
 
@@ -23,16 +23,22 @@ export const publicClient: PublicClient = createPublicClient({
   transport: http(config.rpcUrl),
 });
 
+// Singleton wallet client — nonceManager requires the same instance for sequential nonce tracking
+let _walletClient: WalletClient | null = null;
+
 export function getWalletClient(): WalletClient {
   if (!config.privateKey) {
     throw new Error("PRIVATE_KEY environment variable is required");
   }
-  const account = privateKeyToAccount(config.privateKey as `0x${string}`);
-  return createWalletClient({
-    account,
-    chain,
-    transport: http(config.rpcUrl),
-  });
+  if (!_walletClient) {
+    const account = privateKeyToAccount(config.privateKey as `0x${string}`, { nonceManager });
+    _walletClient = createWalletClient({
+      account,
+      chain,
+      transport: http(config.rpcUrl),
+    });
+  }
+  return _walletClient;
 }
 
 export function getAgentAddress(): Address {
