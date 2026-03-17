@@ -198,9 +198,11 @@ async function tick(seedPassword: string): Promise<void> {
           const check = await fetchJson<{ current: CurrentRaffle | null }>(`${APP_URL}/api/raffles/current`);
           if (!check?.current || check.current.address !== vault || check.current.state !== "OPEN") break;
 
-          const { entered } = await enterRaffle(seedPassword, vault as Address, [player]);
+          const { entered, skipped } = await enterRaffle(seedPassword, vault as Address, [player]);
           if (entered.length > 0) {
             console.log(`[daemon] ☕ ${entered[0]}`);
+          } else if (skipped.length > 0) {
+            console.log(`[daemon] ⚠ ${skipped[0]}`);
           }
         } catch (e) {
           console.log(`[daemon] ${player.name} failed: ${String(e).slice(0, 60)}`);

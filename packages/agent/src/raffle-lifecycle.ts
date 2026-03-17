@@ -540,7 +540,15 @@ export async function advanceRaffle(vault: Address): Promise<RaffleState> {
       break;
 
     case RaffleState.CLOSED: {
-      setServerPhase("DRAWING");
+      const minParticipants = Number(config.raffle.minUniqueParticipants);
+      if (info.participantCount < minParticipants) {
+        setServerPhase("INVALID");
+        console.log(
+          `[lifecycle] Raffle closed with only ${info.participantCount}/${minParticipants} participants — going to INVALID`
+        );
+      } else {
+        setServerPhase("DRAWING");
+      }
       console.log(
         `[lifecycle] Raffle closed with ${info.participantCount} participants. Requesting draw...`
       );
