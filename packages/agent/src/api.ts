@@ -585,14 +585,8 @@ export function createApi(): Hono {
         } catch {}
       };
 
-      // Send initial state immediately
+      // Send initial state immediately, then poll every 3 seconds
       await send();
-
-      // Poll every 3 seconds
-      const interval = setInterval(send, 3000);
-      stream.onAbort(() => clearInterval(interval));
-
-      // Keep alive — SSE requires the connection to stay open
       while (true) {
         await stream.sleep(3000);
         await send();

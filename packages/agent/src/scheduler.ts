@@ -110,10 +110,13 @@ export async function recoverExistingRaffle(): Promise<void> {
     // These fall off the registry's active list but still need attention
     try {
       const inflight = await db.query(
-        `SELECT vault FROM raffles WHERE state IN ('CLOSED','DRAWING','PAYOUT') AND created_at > now() - interval '2 days'
-         UNION
-         SELECT vault FROM raffles WHERE state = 'OPEN' AND closes_at < now() - interval '5 minutes' AND created_at > now() - interval '2 days'
-         ORDER BY created_at DESC LIMIT 5`
+        `SELECT vault FROM (
+           SELECT vault, 1 AS priority, created_at FROM raffles
+             WHERE state IN ('CLOSED','DRAWING','PAYOUT') AND created_at > now() - interval '2 days'
+           UNION ALL
+           SELECT vault, 2 AS priority, created_at FROM raffles
+             WHERE state = 'OPEN' AND closes_at < now() - interval '5 minutes' AND created_at > now() - interval '2 days'
+         ) t ORDER BY priority ASC, created_at DESC LIMIT 5`
       );
       for (const row of inflight) {
         const vaultAddr = row.vault as Address;

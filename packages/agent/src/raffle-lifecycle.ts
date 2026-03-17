@@ -406,8 +406,8 @@ export async function closeRaffle(vault: Address): Promise<void> {
 
 /** Request draw and auto-fulfill if MOCK_VRF_DISPATCHER_ADDRESS is set (testnet only).
  *  With real Chainlink VRF, fulfillment is automatic via callback — no follow-up needed.
- *  Returns the VRF requestId for storage. */
-export async function requestDraw(vault: Address): Promise<string | null> {
+ *  Returns { requestId, drawTx } for storage. */
+export async function requestDraw(vault: Address): Promise<{ requestId: string | null; drawTx: string }> {
   console.log("[lifecycle] Requesting draw:", vault);
   const hash = await writeContract({
     address: vault,
@@ -445,7 +445,7 @@ export async function requestDraw(vault: Address): Promise<string | null> {
     }
   }
 
-  return requestId !== null ? requestId.toString() : null;
+  return { requestId: requestId !== null ? requestId.toString() : null, drawTx: hash };
 }
 
 /**
@@ -539,16 +539,15 @@ export async function advanceRaffle(vault: Address): Promise<RaffleState> {
       }
       break;
 
-    case RaffleState.CLOSED:
+    case RaffleState.CLOSED: {
       setServerPhase("DRAWING");
       console.log(
         `[lifecycle] Raffle closed with ${info.participantCount} participants. Requesting draw...`
       );
-      const requestId = await requestDraw(vault);
-      if (requestId) {
-        try { await db.upsertRaffle({ vault, vrfRequestId: requestId }); } catch {}
-      }
+      const { requestId, drawTx } = await requestDraw(vault);
+      try { await db.upsertRaffle({ vault, vrfRequestId: requestId ?? undefined, drawTx: drawTx ?? undefined }); } catch {}
       return await getVaultState(vault);
+    }
 
     case RaffleState.DRAWING:
       // Chainlink VRF v2.5 push model: VRFDispatcher.fulfillRandomWords() calls
@@ -557,7 +556,7 @@ export async function advanceRaffle(vault: Address): Promise<RaffleState> {
       console.log("[lifecycle] Waiting for Chainlink VRF callback...");
       break;
 
-    case RaffleState.PAYOUT:
+    case RaffleState.PAYOUT: {
       // Capture VRF proof before distributing (Chainlink has already fulfilled by now)
       const vrfProof = await getVrfProof(vault);
       const vrfRequestId = (await db.getRaffle(vault))?.vrf_request_id || null;
@@ -585,6 +584,7 @@ export async function advanceRaffle(vault: Address): Promise<RaffleState> {
         console.log("[lifecycle] DB sync error:", String(e).slice(0, 100));
       }
       return RaffleState.SETTLED;
+    }
 
     case RaffleState.SETTLED:
       try {

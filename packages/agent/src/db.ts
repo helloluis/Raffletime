@@ -70,10 +70,11 @@ export async function upsertRaffle(raffle: {
   coverImage?: string;
   creator?: string;
   vrfRequestId?: string;
+  drawTx?: string;
 }) {
   await pool.query(
-    `INSERT INTO raffles (vault, name, type, state, pool, participants, ticket_price, closes_at, settled_at, cover_image, creator, vrf_request_id, updated_at)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, now())
+    `INSERT INTO raffles (vault, name, type, state, pool, participants, ticket_price, closes_at, settled_at, cover_image, creator, vrf_request_id, draw_tx, updated_at)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, now())
      ON CONFLICT (vault) DO UPDATE SET
        name = COALESCE($2, raffles.name),
        type = COALESCE($3, raffles.type),
@@ -86,6 +87,7 @@ export async function upsertRaffle(raffle: {
        cover_image = COALESCE($10, raffles.cover_image),
        creator = COALESCE($11, raffles.creator),
        vrf_request_id = COALESCE($12, raffles.vrf_request_id),
+       draw_tx = COALESCE($13, raffles.draw_tx),
        updated_at = now()`,
     [
       raffle.vault.toLowerCase(),
@@ -100,6 +102,7 @@ export async function upsertRaffle(raffle: {
       raffle.coverImage || null,
       raffle.creator || null,
       raffle.vrfRequestId || null,
+      raffle.drawTx || null,
     ]
   );
 }
