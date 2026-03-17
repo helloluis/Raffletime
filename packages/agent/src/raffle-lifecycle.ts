@@ -502,6 +502,7 @@ export async function advanceRaffle(vault: Address): Promise<RaffleState> {
     case RaffleState.OPEN:
       setServerPhase("OPEN");
       if (now >= info.closesAt) {
+        await new Promise((r) => setTimeout(r, 5000)); // let block.timestamp catch up
         await closeRaffle(vault);
         setServerPhase("DRAWING");
         return RaffleState.CLOSED;
