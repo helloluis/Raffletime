@@ -467,6 +467,22 @@ export function explorerLink(address: string, chainId: number): string {
   return `<a href="${base}${address}" target="_blank" style="color:inherit"><code>${address}</code></a>`;
 }
 
+export function chainLabel(chainId: number): string {
+  const names: Record<number, string> = {
+    8453: "Base Mainnet",
+    84532: "Base Sepolia Testnet",
+    42220: "Celo Mainnet",
+    44787: "Celo Alfajores Testnet",
+  };
+  return `${names[chainId] ?? "Unknown Chain"} (${chainId})`;
+}
+
+/** Best-effort token symbol for the payment token, derived from chainId. */
+export function paymentTokenLabel(chainId: number): string {
+  // Both Base mainnet and Base Sepolia use USDC as the accepted token
+  return "USDC";
+}
+
 /** Format a usd6 value (6-decimal USD) as a cash price string like "$0.10" */
 export function formatUsd6(usd6: bigint | string | number): string {
   const n = typeof usd6 === "bigint" ? Number(usd6) : typeof usd6 === "string" ? parseFloat(usd6) : usd6;
