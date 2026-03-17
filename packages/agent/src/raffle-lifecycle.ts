@@ -120,7 +120,7 @@ export enum RaffleState {
   INVALID = 6,
 }
 
-const stateNames: Record<number, string> = {
+export const stateNames: Record<number, string> = {
   0: "UNINITIALIZED",
   1: "OPEN",
   2: "CLOSED",

@@ -2,10 +2,12 @@ import { type Address } from "viem";
 import { config } from "./config.js";
 import {
   advanceRaffle,
+  closeRaffle,
   createHouseRaffle,
   getActiveRaffles,
   getRaffleInfo,
   RaffleState,
+  stateNames,
 } from "./raffle-lifecycle.js";
 import { getAgentAddress } from "./chain.js";
 import {
@@ -108,7 +110,10 @@ export async function recoverExistingRaffle(): Promise<void> {
     // These fall off the registry's active list but still need attention
     try {
       const inflight = await db.query(
-        `SELECT vault FROM raffles WHERE state IN ('CLOSED','DRAWING','PAYOUT') AND created_at > now() - interval '2 days' ORDER BY created_at DESC LIMIT 5`
+        `SELECT vault FROM raffles WHERE state IN ('CLOSED','DRAWING','PAYOUT') AND created_at > now() - interval '2 days'
+         UNION
+         SELECT vault FROM raffles WHERE state = 'OPEN' AND closes_at < now() - interval '5 minutes' AND created_at > now() - interval '2 days'
+         ORDER BY created_at DESC LIMIT 5`
       );
       for (const row of inflight) {
         const vaultAddr = row.vault as Address;
@@ -227,6 +232,61 @@ export async function runSchedulerTick(
 }
 
 /**
+ * Periodic health check: find OPEN vaults that are past their close time and close them.
+ * Catches orphaned raffles that the scheduler missed (e.g. after a crash/restart).
+ * Skips the current active vault — the scheduler handles that one.
+ */
+async function orphanCheck(): Promise<void> {
+  try {
+    const db = await import("./db.js");
+    const rows = await db.query(
+      `SELECT vault FROM raffles
+       WHERE state = 'OPEN' AND closes_at < now() - interval '5 minutes'
+       AND created_at > now() - interval '2 days'
+       ORDER BY closes_at ASC`
+    );
+
+    for (const row of rows) {
+      const vault = row.vault as Address;
+      if (vault === currentVault) continue; // scheduler owns this one
+
+      const info = await getRaffleInfo(vault);
+      if (info.state !== RaffleState.OPEN) {
+        // Already advanced on-chain — sync DB state
+        await db.upsertRaffle({ vault, state: stateNames[info.state] || "UNKNOWN" });
+        continue;
+      }
+
+      console.log(`[scheduler] Orphan check: closing stuck vault ${vault}`);
+      try {
+        await closeRaffle(vault);
+        console.log(`[scheduler] Orphan closed: ${vault}`);
+      } catch (e) {
+        console.error(`[scheduler] Orphan close failed for ${vault}:`, String(e).slice(0, 120));
+      }
+    }
+  } catch (e) {
+    console.error("[scheduler] Orphan check error:", String(e).slice(0, 120));
+  }
+}
+
+/**
+ * Schedule orphanCheck at every 5-minute mark of the clock (:00, :05, :10 ...)
+ */
+function startOrphanCheckCron(): void {
+  const scheduleNext = () => {
+    const now = Date.now();
+    const msUntilNext5Min = (5 * 60 * 1000) - (now % (5 * 60 * 1000));
+    setTimeout(async () => {
+      await orphanCheck();
+      scheduleNext();
+    }, msUntilNext5Min);
+  };
+  scheduleNext();
+  console.log("[scheduler] Orphan check cron started (runs at every 5-minute mark)");
+}
+
+/**
  * Start the scheduler loop
  */
 export async function startScheduler(
@@ -238,6 +298,9 @@ export async function startScheduler(
 
   // Recover any in-progress raffle from a previous run
   await recoverExistingRaffle();
+
+  // Start periodic orphan check
+  startOrphanCheckCron();
 
   // Run first tick immediately
   await runSchedulerTick(beneficiaries);
