@@ -100,14 +100,39 @@ async function withRetry<T>(
 export async function recoverExistingRaffle(): Promise<void> {
   try {
     const agentAddress = getAgentAddress();
+    const { publicClient } = await import("./chain.js");
+    const { RaffleVaultAbi } = await import("./abis.js");
+    const db = await import("./db.js");
+
+    // First: check DB for vaults in mid-lifecycle states (CLOSED/DRAWING/PAYOUT)
+    // These fall off the registry's active list but still need attention
+    try {
+      const inflight = await db.query(
+        `SELECT vault FROM raffles WHERE state IN ('CLOSED','DRAWING','PAYOUT') AND created_at > now() - interval '2 days' ORDER BY created_at DESC LIMIT 5`
+      );
+      for (const row of inflight) {
+        const vaultAddr = row.vault as Address;
+        const info = await getRaffleInfo(vaultAddr);
+        if (info.state !== RaffleState.SETTLED && info.state !== RaffleState.INVALID) {
+          const creator = (await publicClient.readContract({
+            address: vaultAddr,
+            abi: RaffleVaultAbi,
+            functionName: "creator",
+          })) as Address;
+          if (creator.toLowerCase() === agentAddress.toLowerCase()) {
+            currentVault = vaultAddr;
+            console.log(`[scheduler] Recovered in-flight raffle: ${currentVault} (state=${info.state})`);
+            return;
+          }
+        }
+      }
+    } catch {}
+
+    // Second: check on-chain registry for OPEN vaults
     const activeRaffles = await getActiveRaffles();
 
     for (const vaultAddr of activeRaffles) {
       const info = await getRaffleInfo(vaultAddr as Address);
-      // Check if this raffle's vault has our agent as creator
-      // We read creator from the vault
-      const { publicClient } = await import("./chain.js");
-      const { RaffleVaultAbi } = await import("./abis.js");
       const creator = (await publicClient.readContract({
         address: vaultAddr as Address,
         abi: RaffleVaultAbi,
@@ -115,26 +140,16 @@ export async function recoverExistingRaffle(): Promise<void> {
       })) as Address;
 
       if (creator.toLowerCase() === agentAddress.toLowerCase()) {
-        // Found our active raffle — resume tracking it
         const state = info.state;
-        if (
-          state !== RaffleState.SETTLED &&
-          state !== RaffleState.INVALID
-        ) {
-          // Sanity check: skip vaults with unreasonably far closesAt (> 25h from now)
-          // This handles the case where old code created a raffle with a bad duration
+        if (state !== RaffleState.SETTLED && state !== RaffleState.INVALID) {
           const nowSecs = BigInt(Math.floor(Date.now() / 1000));
           const maxClosesAt = nowSecs + 90000n; // 25 hours
           if (state === RaffleState.OPEN && info.closesAt > maxClosesAt) {
-            console.log(
-              `[scheduler] Skipping vault with far-future closesAt (${info.closesAt}): ${vaultAddr}`
-            );
+            console.log(`[scheduler] Skipping vault with far-future closesAt (${info.closesAt}): ${vaultAddr}`);
             continue;
           }
           currentVault = vaultAddr as Address;
-          console.log(
-            `[scheduler] Recovered existing raffle: ${currentVault} (state=${state})`
-          );
+          console.log(`[scheduler] Recovered existing raffle: ${currentVault} (state=${state})`);
           return;
         }
       }
