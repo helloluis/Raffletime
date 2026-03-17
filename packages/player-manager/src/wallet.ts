@@ -6,8 +6,8 @@
 
 import WDK from "@tetherto/wdk";
 import WalletManagerEvm from "@tetherto/wdk-wallet-evm";
-import { mnemonicToAccount } from "viem/accounts";
-import { type Address } from "viem";
+import { mnemonicToAccount, nonceManager } from "viem/accounts";
+import { createWalletClient, http, defineChain, type Address, type WalletClient } from "viem";
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from "fs";
 import { resolve, dirname } from "path";
 import { fileURLToPath } from "url";
@@ -77,9 +77,10 @@ export function seedExists(): boolean {
 // ============ WDK instance ============
 
 /** Create a WDK instance registered for EVM (Base) */
-export function createWdk(mnemonic: string, rpcUrl: string, chainId: number): WDK {
+export function createWdk(mnemonic: string, rpcUrl: string, _chainId: number): WDK {
+  // WalletManagerEvm expects { provider: rpcUrl } — the RPC URL is the provider string
   return (new WDK(mnemonic) as any)
-    .registerWallet("evm", WalletManagerEvm, { rpcUrl, chainId }) as WDK;
+    .registerWallet("evm", WalletManagerEvm, { provider: rpcUrl }) as WDK;
 }
 
 /** Get a WDK account for a player by index (index-based HD derivation) */
@@ -101,4 +102,33 @@ export function getPlayerAddresses(mnemonic: string, count: number): { index: nu
     result.push({ index: i, address: getPlayerAddress(mnemonic, i) });
   }
   return result;
+}
+
+// Cache wallet clients per index to preserve nonceManager state across sequential TXs
+const _walletClientCache = new Map<string, WalletClient>();
+
+/**
+ * Get a viem wallet client for a player — uses nonceManager so sequential
+ * approve+enter TXs don't collide. Cached per (mnemonic+index) pair.
+ */
+export function getPlayerWalletClient(
+  mnemonic: string,
+  index: number,
+  rpcUrl: string,
+  chainId: number
+): WalletClient {
+  const cacheKey = `${index}:${rpcUrl}`;
+  if (_walletClientCache.has(cacheKey)) return _walletClientCache.get(cacheKey)!;
+
+  const chain = defineChain({
+    id: chainId,
+    name: chainId === 8453 ? "Base" : "Base Sepolia",
+    nativeCurrency: { name: "Ether", symbol: "ETH", decimals: 18 },
+    rpcUrls: { default: { http: [rpcUrl] } },
+  });
+
+  const account = mnemonicToAccount(mnemonic, { addressIndex: index, nonceManager });
+  const client = createWalletClient({ account, chain, transport: http(rpcUrl) });
+  _walletClientCache.set(cacheKey, client);
+  return client;
 }
