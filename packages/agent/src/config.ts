@@ -43,7 +43,7 @@ export const config = {
     targetPoolSize: BigInt(
       process.env.TARGET_POOL_SIZE_USD6 || "100000000"
     ), // $100 in 6-decimal USD
-    minUniqueParticipants: 2n,
+    minUniqueParticipants: BigInt(process.env.MIN_UNIQUE_PARTICIPANTS || "2"),
     agentsOnly: process.env.AGENTS_ONLY === "true",
   },
 
