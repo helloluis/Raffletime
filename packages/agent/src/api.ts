@@ -877,6 +877,11 @@ export function createApi(): Hono {
         if(d.participants) partEl.textContent = d.participants;
         if(d.winners && d.winners.length) winners = d.winners;
         if(d.vault && d.vault !== vault){
+          if(!vault){
+            // Page loaded with no active raffle — reload to get full server render
+            window.location.reload();
+            return;
+          }
           if(phase && phase !== 'RESET_'){
             // In post-raffle timeline — queue the new vault, don't switch yet
             pendingVault = d.vault;
