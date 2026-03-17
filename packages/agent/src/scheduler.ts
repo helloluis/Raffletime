@@ -40,6 +40,59 @@ export function setServerPhase(phase: ServerPhase, winner?: typeof lastWinner) {
 // Guard against overlapping ticks
 let tickInProgress = false;
 
+// Consecutive failure tracking for retry/backoff/alert
+let consecutiveFailures = 0;
+let backoffUntil = 0; // epoch ms — skip ticks until this time
+
+async function sendAlert(message: string): Promise<void> {
+  if (!config.alertApiKey) return;
+  try {
+    await fetch(config.alertWebhookUrl, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${config.alertApiKey}` },
+      body: JSON.stringify({ message, source: "raffletime-agent" }),
+    });
+  } catch {}
+}
+
+/**
+ * Run fn with retry: 1 attempt/second up to maxAttempts, then exponential backoff.
+ * Alerts the owner after maxAttempts failures.
+ */
+async function withRetry<T>(
+  fn: () => Promise<T>,
+  label: string,
+  maxAttempts = 3
+): Promise<T> {
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      const result = await fn();
+      if (consecutiveFailures > 0) {
+        console.log(`[scheduler] ${label} recovered after ${consecutiveFailures} failure(s)`);
+        consecutiveFailures = 0;
+        backoffUntil = 0;
+      }
+      return result;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.error(`[scheduler] ${label} attempt ${attempt}/${maxAttempts} failed: ${msg.slice(0, 120)}`);
+      if (attempt < maxAttempts) {
+        await new Promise((r) => setTimeout(r, 1000)); // 1s between retries
+      }
+    }
+  }
+
+  // All attempts exhausted
+  consecutiveFailures++;
+  const backoffSecs = Math.min(60 * 16, Math.pow(2, consecutiveFailures) * 15); // 15s, 30s, 60s … 16min cap
+  backoffUntil = Date.now() + backoffSecs * 1000;
+  const alertMsg = `⚠️ RaffleTime agent: **${label}** failed ${maxAttempts}x in a row (${consecutiveFailures} consecutive). Backing off ${backoffSecs}s.`;
+  console.error(`[scheduler] ${alertMsg}`);
+  await sendAlert(alertMsg);
+
+  throw new Error(`${label} failed after ${maxAttempts} attempts`);
+}
+
 /**
  * On startup, scan for any existing active raffle created by this agent.
  * Prevents orphaned raffles and duplicate creation after restart.
@@ -108,31 +161,37 @@ export async function runSchedulerTick(
     return;
   }
 
+  // Skip tick during backoff window
+  if (Date.now() < backoffUntil) {
+    const secsLeft = Math.ceil((backoffUntil - Date.now()) / 1000);
+    console.log(`[scheduler] In backoff — skipping tick (${secsLeft}s remaining)`);
+    tickInProgress = false;
+    return;
+  }
+
   tickInProgress = true;
   try {
-    // Check if we have an active raffle
     if (currentVault) {
-      const state = await advanceRaffle(currentVault);
+      const state = await withRetry(
+        () => advanceRaffle(currentVault!),
+        `advanceRaffle(${currentVault.slice(0, 10)}…)`
+      );
 
-      // If settled or invalid, clear current vault so next tick creates a new one
       if (state === RaffleState.SETTLED || state === RaffleState.INVALID) {
-        console.log(
-          "[scheduler] Raffle completed:",
-          currentVault,
-          "state:",
-          RaffleState[state]
-        );
+        console.log("[scheduler] Raffle completed:", currentVault, "state:", RaffleState[state]);
         currentVault = null;
       }
       return;
     }
 
-    // No active raffle — create a new one (beneficiaries are optional)
+    // No active raffle — create a new one
     const raffleName = nextHouseRaffleName();
     console.log(`[scheduler] Creating new house raffle: "${raffleName}"...`);
-    currentVault = await createHouseRaffle(beneficiaries, raffleName);
+    currentVault = await withRetry(
+      () => createHouseRaffle(beneficiaries, raffleName),
+      "createHouseRaffle"
+    );
 
-    // Save metadata for this raffle
     saveRaffleMeta({
       vault: currentVault,
       name: raffleName,
@@ -146,7 +205,7 @@ export async function runSchedulerTick(
     setServerPhase("OPEN");
     console.log("[scheduler] House raffle active:", currentVault);
   } catch (error) {
-    console.error("[scheduler] Error:", error);
+    // withRetry already logged and alerted — nothing more to do this tick
   } finally {
     tickInProgress = false;
   }

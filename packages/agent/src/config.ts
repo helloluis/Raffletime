@@ -51,6 +51,10 @@ export const config = {
   raffleCycleMs: parseInt(process.env.RAFFLE_CYCLE_MS || "3600000"), // 1 hour
   pollIntervalMs: parseInt(process.env.POLL_INTERVAL_MS || "15000"), // 15 seconds
 
+  // Alerts — Beaniebot push API
+  alertWebhookUrl: process.env.ALERT_WEBHOOK_URL || "https://beanie.cryptoday.live/api/alerts/push",
+  alertApiKey: process.env.ALERT_API_KEY || "",
+
   // Server
   port: parseInt(process.env.PORT || "3000"),
 } as const;

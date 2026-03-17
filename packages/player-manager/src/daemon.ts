@@ -159,12 +159,16 @@ async function tick(seedPassword: string): Promise<void> {
           if (entered.length > 0) {
             console.log(`[daemon] ☕ ${player.name} ticket ${t+1}/${ticketCount}`);
           }
+          // Min 5s between tickets for the same player
+          if (t < ticketCount - 1) {
+            await new Promise((r) => setTimeout(r, 5000 + Math.random() * 5000));
+          }
         }
       } catch (e) {
         console.log(`[daemon] ${player.name} failed: ${String(e).slice(0, 60)}`);
       }
-      // Stagger between players (15-45s)
-      await new Promise((r) => setTimeout(r, 15000 + Math.random() * 30000));
+      // Stagger between players — min 5s, random up to 30s extra
+      await new Promise((r) => setTimeout(r, 5000 + Math.random() * 30000));
     }
 
     await sendAlert(`Early wave: **${earlyWavePlayers.length}** house players seeded the pot`);
@@ -201,7 +205,8 @@ async function tick(seedPassword: string): Promise<void> {
         } catch (e) {
           console.log(`[daemon] ${player.name} failed: ${String(e).slice(0, 60)}`);
         }
-        await new Promise((r) => setTimeout(r, 3000 + Math.random() * 8000));
+        // Min 5s between late-wave entries
+        await new Promise((r) => setTimeout(r, 5000 + Math.random() * 10000));
       }
 
       await sendAlert(`Late wave: **${latePlayers.length}** more house players entered (only ${organicCount} organic)`);
