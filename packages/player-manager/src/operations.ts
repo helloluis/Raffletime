@@ -4,12 +4,12 @@
  */
 
 import {
-  createPublicClient, createWalletClient, http, parseEther, encodeFunctionData,
+  createPublicClient, createWalletClient, http, parseEther,
   defineChain, type Address,
 } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import {
-  createWdk, getWdkAccount, getPlayerAddress, loadSeed,
+  getPlayerAddress, loadSeed, getPlayerWalletClient,
 } from "./wallet.js";
 import {
   type Player, type RiskProfile, addPlayer, updatePlayer, loadRegistry,
@@ -32,6 +32,7 @@ const publicClient = createPublicClient({ chain, transport: http(config.rpcUrl) 
 
 const ERC20_ABI = [
   { name: "approve", type: "function", stateMutability: "nonpayable", inputs: [{ name: "spender", type: "address" }, { name: "amount", type: "uint256" }], outputs: [{ name: "", type: "bool" }] },
+  { name: "allowance", type: "function", stateMutability: "view", inputs: [{ name: "owner", type: "address" }, { name: "spender", type: "address" }], outputs: [{ name: "", type: "uint256" }] },
   { name: "balanceOf", type: "function", stateMutability: "view", inputs: [{ name: "account", type: "address" }], outputs: [{ name: "", type: "uint256" }] },
   { name: "transfer", type: "function", stateMutability: "nonpayable", inputs: [{ name: "to", type: "address" }, { name: "amount", type: "uint256" }], outputs: [{ name: "", type: "bool" }] },
   { name: "mint", type: "function", stateMutability: "nonpayable", inputs: [{ name: "to", type: "address" }, { name: "amount", type: "uint256" }], outputs: [] },
@@ -160,14 +161,14 @@ export async function fundPlayers(
         const hash = await treasuryWallet.writeContract({
           address: config.paymentToken, abi: ERC20_ABI, functionName: "mint",
           args: [player.address as Address, needed],
-        } as any);
+        chain } as any);
         await publicClient.waitForTransactionReceipt({ hash });
         console.log(`  ${player.name}: minted $${(Number(needed) / (10 ** tokenDecimals)).toFixed(2)}`);
       } else {
         const hash = await treasuryWallet.writeContract({
           address: config.paymentToken, abi: ERC20_ABI, functionName: "transfer",
           args: [player.address as Address, needed],
-        } as any);
+        chain } as any);
         await publicClient.waitForTransactionReceipt({ hash });
         console.log(`  ${player.name}: transferred $${(Number(needed) / (10 ** tokenDecimals)).toFixed(2)}`);
       }
@@ -179,7 +180,6 @@ export async function fundPlayers(
 
 export async function registerPlayers(seedPassword: string): Promise<void> {
   const mnemonic = loadSeed(seedPassword);
-  const wdk = createWdk(mnemonic, config.rpcUrl, config.chainId);
   const players = loadRegistry().filter((p) => !p.registered && !p.paused);
 
   for (const player of players) {
@@ -196,35 +196,37 @@ export async function registerPlayers(seedPassword: string): Promise<void> {
       continue;
     }
 
-    const account = await getWdkAccount(wdk, player.index);
+    const wallet = getPlayerWalletClient(mnemonic, player.index, config.rpcUrl, config.chainId);
     const bond = BigInt(1000000); // $1 USDC
 
-    // Approve bond via WDK
-    const approveData = encodeFunctionData({
-      abi: ERC20_ABI, functionName: "approve",
-      args: [config.agentRegistry, bond],
-    });
-    const { hash: approveHash } = await account.sendTransaction({
-      to: config.paymentToken, data: approveData,
-    });
-    await publicClient.waitForTransactionReceipt({ hash: approveHash });
+    // Check if approve is needed (skip if allowance already sufficient)
+    const allowance = (await publicClient.readContract({
+      address: config.paymentToken, abi: ERC20_ABI, functionName: "allowance",
+      args: [address, config.agentRegistry],
+    })) as bigint;
 
-    // Register via WDK
+    if (allowance < bond) {
+      // Approve bond — nonceManager tracks nonce in-memory for sequential TXs
+      const approveHash = await wallet.writeContract({
+        address: config.paymentToken, abi: ERC20_ABI, functionName: "approve",
+        args: [config.agentRegistry, bond],
+      chain } as any);
+      await publicClient.waitForTransactionReceipt({ hash: approveHash });
+    }
+
+    // Register agent
     const uri = `https://raffletime.io/agents/${player.name.toLowerCase().replace(/\s+/g, "-")}.json`;
-    const registerData = encodeFunctionData({
-      abi: AGENT_REG_ABI, functionName: "registerAgent",
+    const regHash = await wallet.writeContract({
+      address: config.agentRegistry, abi: AGENT_REG_ABI, functionName: "registerAgent",
       args: [uri, bond],
-    });
-    const { hash: regHash } = await account.sendTransaction({
-      to: config.agentRegistry, data: registerData,
-    });
+    chain } as any);
     await publicClient.waitForTransactionReceipt({ hash: regHash });
 
     updatePlayer(player.index, {
       registered: true,
       totalSpent: (BigInt(player.totalSpent) + bond).toString(),
     });
-    console.log(`  ${player.name}: registered via WDK (bond $1 USDC)`);
+    console.log(`  ${player.name}: registered (bond $1 USDC)`);
   }
 }
 
@@ -236,7 +238,6 @@ export async function enterRaffle(
   playerSubset?: Player[]
 ): Promise<{ entered: string[]; skipped: string[] }> {
   const mnemonic = loadSeed(seedPassword);
-  const wdk = createWdk(mnemonic, config.rpcUrl, config.chainId);
   const players = playerSubset || getActivePlayers();
   const entered: string[] = [];
   const skipped: string[] = [];
@@ -272,28 +273,23 @@ export async function enterRaffle(
       continue;
     }
 
-    const account = await getWdkAccount(wdk, player.index);
+    const wallet = getPlayerWalletClient(mnemonic, player.index, config.rpcUrl, config.chainId);
+    const playerAddr = player.address as Address;
 
     try {
       for (let t = 0; t < tickets; t++) {
-        // Approve ticket price via WDK
-        const approveData = encodeFunctionData({
-          abi: ERC20_ABI, functionName: "approve",
+        // Approve ticket price — nonceManager tracks sequential nonces in-memory
+        const approveHash = await wallet.writeContract({
+          address: config.paymentToken, abi: ERC20_ABI, functionName: "approve",
           args: [vault, ticketPrice],
-        });
-        const { hash: approveHash } = await account.sendTransaction({
-          to: config.paymentToken, data: approveData,
-        });
+        chain } as any);
         await publicClient.waitForTransactionReceipt({ hash: approveHash });
 
-        // Enter raffle via WDK
-        const enterData = encodeFunctionData({
-          abi: VAULT_ABI, functionName: "enterRaffle",
+        // Enter raffle
+        const enterHash = await wallet.writeContract({
+          address: vault, abi: VAULT_ABI, functionName: "enterRaffle",
           args: [config.paymentToken, beneficiary],
-        });
-        const { hash: enterHash } = await account.sendTransaction({
-          to: vault, data: enterData,
-        });
+        chain } as any);
         await publicClient.waitForTransactionReceipt({ hash: enterHash });
       }
 
@@ -318,7 +314,6 @@ export async function rebalancePlayers(
   targetBalance: bigint = BigInt(3_000_000) // $3 USDC
 ): Promise<void> {
   const mnemonic = loadSeed(seedPassword);
-  const wdk = createWdk(mnemonic, config.rpcUrl, config.chainId);
   const players = loadRegistry().filter((p) => !p.paused);
 
   const balances: { player: Player; balance: bigint }[] = [];
@@ -338,14 +333,11 @@ export async function rebalancePlayers(
     const donor = rich.find((r) => r.balance > needed + targetBalance);
     if (!donor) continue;
 
-    const donorAccount = await getWdkAccount(wdk, donor.player.index);
-    const transferData = encodeFunctionData({
-      abi: ERC20_ABI, functionName: "transfer",
+    const wallet = getPlayerWalletClient(mnemonic, donor.player.index, config.rpcUrl, config.chainId);
+    const hash = await wallet.writeContract({
+      address: config.paymentToken, abi: ERC20_ABI, functionName: "transfer",
       args: [poorPlayer.player.address as Address, needed],
-    });
-    const { hash } = await donorAccount.sendTransaction({
-      to: config.paymentToken, data: transferData,
-    });
+    chain } as any);
     await publicClient.waitForTransactionReceipt({ hash });
 
     donor.balance -= needed;
@@ -361,7 +353,6 @@ export async function sweepWinnings(
   threshold: bigint = BigInt(10_000_000) // $10 USDC
 ): Promise<void> {
   const mnemonic = loadSeed(seedPassword);
-  const wdk = createWdk(mnemonic, config.rpcUrl, config.chainId);
   const players = loadRegistry();
 
   for (const p of players) {
@@ -372,14 +363,11 @@ export async function sweepWinnings(
 
     if (balance > threshold) {
       const sweepAmount = balance - BigInt(1_000_000); // Keep $1 USDC
-      const account = await getWdkAccount(wdk, p.index);
-      const transferData = encodeFunctionData({
-        abi: ERC20_ABI, functionName: "transfer",
+      const wallet = getPlayerWalletClient(mnemonic, p.index, config.rpcUrl, config.chainId);
+      const hash = await wallet.writeContract({
+        address: config.paymentToken, abi: ERC20_ABI, functionName: "transfer",
         args: [coldWallet, sweepAmount],
-      });
-      const { hash } = await account.sendTransaction({
-        to: config.paymentToken, data: transferData,
-      });
+      chain } as any);
       await publicClient.waitForTransactionReceipt({ hash });
       console.log(`  ${p.name}: swept $${formatUsd6(sweepAmount)} → cold wallet`);
     }
