@@ -13,10 +13,10 @@ export const config = {
     agentRegistry: (process.env.AGENT_REGISTRY_ADDRESS || "0x") as Address,
     paymentToken: (process.env.PAYMENT_TOKEN_ADDRESS ||
       "0x036CbD53842c5426634e7929541eC2318f3dCF7e") as Address, // USDC on Base Sepolia
-    // Token used for agent registration bond (may differ from raffle payment token on testnet)
+    // Token used for agent registration bond (same as payment token — USDC)
     bondToken: (process.env.BOND_TOKEN_ADDRESS ||
       process.env.PAYMENT_TOKEN_ADDRESS ||
-      "0x036CbD53842c5426634e7929541eC2318f3dCF7e") as Address,
+      "0x036CbD53842c5426634e7929541eC2318f3dCF7e") as Address, // USDC on Base Sepolia
   },
 
   // House agent wallet
@@ -27,8 +27,8 @@ export const config = {
     process.env.AGENT_URI ||
     "https://raffletime.io/.well-known/house-agent.json",
 
-  // Admission bond — $1 USDC (6 decimals = 1e6)
-  bondAmount: BigInt(process.env.BOND_AMOUNT || "1000000"),
+  // Admission bond — $1 USDC (6 decimals)
+  bondAmount: BigInt(process.env.BOND_AMOUNT || "1000000"), // 1e6 = $1
 
   // Raffle defaults
   raffle: {

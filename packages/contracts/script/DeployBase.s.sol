@@ -10,7 +10,7 @@ import "../src/BeneficiaryRegistry.sol";
 import "../src/TicketNFT.sol";
 import "../src/ReceiptSBT.sol";
 import {MockRandomness} from "../src/mocks/MockRandomness.sol";
-import "../src/mocks/MockERC20.sol";
+// MockERC20 not used in final deployment
 
 /// @title DeployBase
 /// @notice Deploys the full RaffleTime protocol to Base Sepolia testnet.
@@ -38,11 +38,6 @@ contract DeployBase is Script {
         address usdc = 0x036CbD53842c5426634e7929541eC2318f3dCF7e; // Circle USDC on Base Sepolia
         address usdt = 0x8d9cb8f3191Fd685e2C14D2AC3Fb2b16D44EAfc3; // Tether USDT on Base Sepolia
 
-        // Also deploy a MockERC20 for agent registration bonds (avoids needing real stablecoins for testnet)
-        MockERC20 mockToken = new MockERC20();
-        console.log("Deployed MockERC20 (bond token):", address(mockToken));
-        mockToken.mint(deployer, 10_000e18);
-
         // Build accepted tokens list: USDC + USDT (both 6 decimals)
         address[] memory tokens = new address[](2);
         uint8[] memory decimals = new uint8[](2);
@@ -55,9 +50,8 @@ contract DeployBase is Script {
         BeneficiaryRegistry beneficiaryRegistry = new BeneficiaryRegistry();
         console.log("BeneficiaryRegistry:", address(beneficiaryRegistry));
 
-        // AgentRegistry uses MockERC20 for testnet bonds (18 decimals, $1 bond = 1e18)
-        // On mainnet, switch to USDC: new AgentRegistry(usdc, 1e6)
-        AgentRegistry agentRegistry = new AgentRegistry(address(mockToken), 1e18);
+        // AgentRegistry uses USDC for bonds, $1 minimum
+        AgentRegistry agentRegistry = new AgentRegistry(usdc, 1e6);
         console.log("AgentRegistry:", address(agentRegistry));
 
         TicketNFT ticketNFT = new TicketNFT();
@@ -118,7 +112,6 @@ contract DeployBase is Script {
         console.log("AGENT_REGISTRY_ADDRESS=%s", vm.toString(address(agentRegistry)));
         console.log("PAYMENT_TOKEN_ADDRESS=%s", vm.toString(usdc));
         console.log("USDT_ADDRESS=%s", vm.toString(usdt));
-        console.log("BOND_TOKEN_ADDRESS=%s", vm.toString(address(mockToken)));
         console.log("RANDOMNESS_ORACLE_ADDRESS=%s", vm.toString(address(mockRandomness)));
         console.log("==================================");
     }
