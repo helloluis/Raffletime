@@ -1,4 +1,4 @@
-import { useReadContract, useReadContracts, useWriteContract, useWatchContractEvent } from "wagmi";
+import { useReadContract, useReadContracts, useWriteContract, useWaitForTransactionReceipt, useWatchContractEvent } from "wagmi";
 import { formatEther, type Address, encodePacked, keccak256 } from "viem";
 import { contracts } from "./config";
 import {
@@ -55,6 +55,7 @@ export function useRaffleDetails(vault: Address | undefined) {
       { address: addr, abi: RaffleVaultAbi, functionName: "winningBeneficiary" },
       { address: addr, abi: RaffleVaultAbi, functionName: "creator" },
       { address: addr, abi: RaffleVaultAbi, functionName: "getBeneficiaryOptions" },
+      { address: addr, abi: RaffleVaultAbi, functionName: "params" },
     ],
     query: { enabled: !!vault, refetchInterval: 10_000 },
   });
@@ -100,7 +101,7 @@ export function useApproveToken() {
   return useWriteContract();
 }
 
-export function useCommitEntry() {
+export function useEnterRaffle() {
   return useWriteContract();
 }
 
@@ -171,7 +172,14 @@ export const RAFFLE_STATES = [
   "INVALID",
 ] as const;
 
+export { useWaitForTransactionReceipt };
+
 export function formatPool(value: bigint | undefined): string {
   if (value === undefined) return "0.00";
   return formatEther(value);
+}
+
+export function formatUsd6(value: bigint | undefined): string {
+  if (value === undefined) return "$0.00";
+  return `$${(Number(value) / 1e6).toFixed(2)}`;
 }

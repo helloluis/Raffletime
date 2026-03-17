@@ -1,12 +1,24 @@
 import { useState, useEffect } from 'react';
+import { useParams } from 'react-router-dom';
+import { useAccount } from 'wagmi';
+import { ConnectButton } from '@rainbow-me/rainbowkit';
 import { Button } from '../ui/button';
-import { Switch } from '../ui/switch';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../ui/select';
 import { RadioGroup, RadioGroupItem } from '../ui/radio-group';
 import { Label } from '../ui/label';
-import { ArrowLeft, Check } from 'lucide-react';
+import { ArrowLeft, Check, Loader2 } from 'lucide-react';
 import { ProgressStepper } from '../ProgressStepper';
-import { ImageWithFallback } from '../figma/ImageWithFallback';
+import {
+  useRaffleDetails,
+  useCusdAllowance,
+  useCusdBalance,
+  useApproveToken,
+  useEnterRaffle,
+  useWaitForTransactionReceipt,
+  formatUsd6,
+} from '../../web3/hooks';
+import { contracts } from '../../web3/config';
+import { RaffleVaultAbi, ERC20Abi } from '../../web3/abis';
+import type { Address } from 'viem';
 
 interface TicketingProps {
   onBack: () => void;
@@ -14,73 +26,91 @@ interface TicketingProps {
 }
 
 export function Ticketing({ onBack, onSuccess }: TicketingProps) {
+  const { address: vaultParam } = useParams<{ address: string }>();
+  const vault = vaultParam as Address | undefined;
+
+  const { address: userAddress, isConnected } = useAccount();
   const [currentStep, setCurrentStep] = useState(0);
-  const [keepSignedIn, setKeepSignedIn] = useState(true);
-  const [selectedNumbers, setSelectedNumbers] = useState<string[]>(['', '', '', '']);
   const [selectedCharity, setSelectedCharity] = useState('');
   const [timeLeft, setTimeLeft] = useState({ minutes: 0, seconds: 0 });
 
-  const steps = ['Sign In', 'Pick Numbers', 'Choose Charity'];
+  const steps = ['Connect', 'Buy Ticket', 'Choose Charity'];
 
-  const charities = [
-    {
-      name: 'UNICEF',
-      logo: 'https://images.unsplash.com/photo-1617783919077-f86206a0f495?crop=entropy&cs=tinysrgb&fit=max&fm=jpg&ixid=M3w3Nzg4Nzd8MHwxfHNlYXJjaHwxfHxVTklDRUYlMjBsb2dvJTIwb2ZmaWNpYWx8ZW58MXx8fHwxNzU4Njc0NDAwfDA&ixlib=rb-4.1.0&q=80&w=1080&utm_source=figma&utm_medium=referral'
-    },
-    {
-      name: 'Save the Children',
-      logo: 'https://images.unsplash.com/photo-1584441405886-bc91be61e56a?crop=entropy&cs=tinysrgb&fit=max&fm=jpg&ixid=M3w3Nzg4Nzd8MHwxfHNlYXJjaHwxfHxTYXZlJTIwdGhlJTIwQ2hpbGRyZW4lMjBjaGFyaXR5JTIwbG9nb3xlbnwxfHx8fDE3NTg2NzQ0MDN8MA&ixlib=rb-4.1.0&q=80&w=1080&utm_source=figma&utm_medium=referral'
-    },
-    {
-      name: 'ChildFund International',
-      logo: 'https://images.unsplash.com/photo-1530290634303-ec5bd373e292?crop=entropy&cs=tinysrgb&fit=max&fm=jpg&ixid=M3w3Nzg4Nzd8MHwxfHNlYXJjaHwxfHxDaGlsZEZ1bmQlMjBJbnRlcm5hdGlvbmFsJTIwbG9nb3xlbnwxfHx8fDE3NTg2NzQ0MDV8MA&ixlib=rb-4.1.0&q=80&w=1080&utm_source=figma&utm_medium=referral'
-    },
-    {
-      name: 'WorldVision International',
-      logo: 'https://images.unsplash.com/photo-1570358934836-6802981e481e?crop=entropy&cs=tinysrgb&fit=max&fm=jpg&ixid=M3w3Nzg4Nzd8MHwxfHNlYXJjaHwxfHxXb3JsZCUyMFZpc2lvbiUyMEludGVybmF0aW9uYWwlMjBjaGFyaXR5JTIwbG9nb3xlbnwxfHx8fDE3NTg2NzQ0MDh8MA&ixlib=rb-4.1.0&q=80&w=1080&utm_source=figma&utm_medium=referral'
-    }
-  ];
+  // Contract reads
+  const { data: details } = useRaffleDetails(vault);
+  const closesAt = details?.[2]?.result as bigint | undefined;
+  const beneficiaryOptions = details?.[9]?.result as Address[] | undefined;
+  const raffleParams = details?.[10]?.result as { ticketPriceUsd6: bigint } | undefined;
+  const ticketPrice = raffleParams?.ticketPriceUsd6 ?? 100000n; // default $0.10
 
-  // Countdown timer
+  const { data: allowance } = useCusdAllowance(userAddress, vault);
+  const { data: usdcBalance } = useCusdBalance(userAddress);
+
+  // Write hooks
+  const { writeContract: approveWrite, data: approveTxHash, isPending: isApprovePending } = useApproveToken();
+  const { writeContract: enterWrite, data: enterTxHash, isPending: isEnterPending } = useEnterRaffle();
+
+  const { isLoading: isApproveConfirming, isSuccess: isApproveConfirmed } =
+    useWaitForTransactionReceipt({ hash: approveTxHash });
+  const { isLoading: isEnterConfirming, isSuccess: isEnterConfirmed } =
+    useWaitForTransactionReceipt({ hash: enterTxHash });
+
+  // Auto-advance: if wallet already connected, skip connect step
   useEffect(() => {
-    const updateCountdown = () => {
-      const now = new Date();
-      const nextHour = new Date(now);
-      nextHour.setHours(now.getHours() + 1, 0, 0, 0);
-      
-      const diff = nextHour.getTime() - now.getTime();
-      const minutes = Math.floor(diff / (1000 * 60));
-      const seconds = Math.floor((diff % (1000 * 60)) / 1000);
-      
-      setTimeLeft({ minutes, seconds });
+    if (isConnected && currentStep === 0) setCurrentStep(1);
+  }, [isConnected]);
+
+  // After approve confirms, advance to charity step
+  useEffect(() => {
+    if (isApproveConfirmed) setCurrentStep(2);
+  }, [isApproveConfirmed]);
+
+  // After enter confirms, call onSuccess
+  useEffect(() => {
+    if (isEnterConfirmed) onSuccess();
+  }, [isEnterConfirmed]);
+
+  // Countdown from contract closesAt
+  useEffect(() => {
+    const update = () => {
+      const target = closesAt ? Number(closesAt) * 1000 : Date.now() + 3600000;
+      const diff = Math.max(0, target - Date.now());
+      setTimeLeft({
+        minutes: Math.floor(diff / 60000),
+        seconds: Math.floor((diff % 60000) / 1000),
+      });
     };
+    update();
+    const id = setInterval(update, 1000);
+    return () => clearInterval(id);
+  }, [closesAt]);
 
-    updateCountdown();
-    const interval = setInterval(updateCountdown, 1000);
-    return () => clearInterval(interval);
-  }, []);
+  const hasAllowance = allowance !== undefined && allowance >= ticketPrice;
+  const hasBalance = usdcBalance !== undefined && usdcBalance >= ticketPrice;
 
-  const handleSignIn = () => {
-    console.log('Signing in with wallet...');
-    setCurrentStep(1);
+  const handleApproveOrAdvance = () => {
+    if (!vault) return;
+    if (hasAllowance) {
+      // Already approved — skip straight to charity step
+      setCurrentStep(2);
+    } else {
+      approveWrite({
+        address: contracts.paymentToken,
+        abi: ERC20Abi,
+        functionName: 'approve',
+        args: [vault, ticketPrice],
+      });
+    }
   };
 
-  const handleBuyTicket = () => {
-    console.log(`Buying ticket with numbers: ${selectedNumbers.join('')}`);
-    setCurrentStep(2);
-  };
-
-  const handleNumberChange = (index: number, value: string) => {
-    const newNumbers = [...selectedNumbers];
-    newNumbers[index] = value;
-    setSelectedNumbers(newNumbers);
-  };
-
-  const isTicketComplete = selectedNumbers.every(num => num !== '');
-
-  const handleVote = () => {
-    console.log(`Voting for ${selectedCharity}`);
-    onSuccess();
+  const handleEnter = () => {
+    if (!vault || !selectedCharity) return;
+    enterWrite({
+      address: vault,
+      abi: RaffleVaultAbi,
+      functionName: 'enterRaffle',
+      args: [contracts.paymentToken, selectedCharity as Address],
+    });
   };
 
   const renderStep = () => {
@@ -90,44 +120,15 @@ export function Ticketing({ onBack, onSuccess }: TicketingProps) {
           <div className="space-y-6">
             <div className="text-center">
               <h2 className="text-2xl font-bold mb-4" style={{ color: '#514444' }}>
-                Sign in to RaffleTime
+                Connect your wallet
               </h2>
-              <p className="mb-4" style={{ color: '#514444' }}>
-                Sign in to confirm wallet ownership and authenticate to RaffleTime.
-              </p>
               <p className="mb-6" style={{ color: '#514444' }}>
-                This app will see:
+                Connect a Base Sepolia wallet to enter the raffle.
               </p>
-              
-              <div className="bg-white rounded-lg p-4 mb-6 text-left">
-                <div className="space-y-3">
-                  <div className="flex items-center space-x-3">
-                    <Check className="h-5 w-5 text-green-500" />
-                    <span style={{ color: '#514444' }}>Your wallet</span>
-                  </div>
-                  <div className="flex items-center space-x-3">
-                    <Check className="h-5 w-5 text-green-500" />
-                    <span style={{ color: '#514444' }}>Your verification level</span>
-                  </div>
-                </div>
-              </div>
-
-              <div className="flex items-center justify-between bg-white rounded-lg p-4 mb-6">
-                <span style={{ color: '#514444' }}>Keep me signed in for future sessions</span>
-                <Switch
-                  checked={keepSignedIn}
-                  onCheckedChange={setKeepSignedIn}
-                />
-              </div>
             </div>
-
-            <Button
-              onClick={handleSignIn}
-              className="w-full py-3"
-              style={{ backgroundColor: '#bc1f13', color: '#FFFFFF' }}
-            >
-              SIGN IN
-            </Button>
+            <div className="flex justify-center">
+              <ConnectButton />
+            </div>
           </div>
         );
 
@@ -136,16 +137,9 @@ export function Ticketing({ onBack, onSuccess }: TicketingProps) {
           <div className="space-y-6">
             <div className="text-center">
               <h2 className="text-2xl font-bold mb-2" style={{ color: '#514444' }}>
-                Eyes on the Prize 👁️💰
+                Buy a Ticket
               </h2>
-              <div className="text-3xl font-bold mb-1" style={{ color: '#514444' }}>
-                Win $1,000
-              </div>
-              <div className="text-sm opacity-80 mb-4" style={{ color: '#514444' }}>
-                Total pool $2,050
-              </div>
-              
-              <div className="flex items-center justify-center gap-2 mb-6">
+              <div className="flex items-center justify-center gap-2 mb-4">
                 <span>⏰</span>
                 <span className="text-lg font-bold text-red-500">
                   {String(timeLeft.minutes).padStart(2, '0')}:
@@ -154,87 +148,47 @@ export function Ticketing({ onBack, onSuccess }: TicketingProps) {
               </div>
             </div>
 
-            <div className="bg-white rounded-lg p-6 space-y-6">
-              <div>
-                <Label className="block mb-4 text-center" style={{ color: '#514444' }}>
-                  Pick Your Lucky Numbers!
-                </Label>
-                
-                {/* 4 Number Selectors Grid */}
-                <div className="grid grid-cols-4 gap-3 mb-6">
-                  {selectedNumbers.map((number, index) => (
-                    <div key={index} className="text-center">
-                      <Label className="block mb-2 text-sm" style={{ color: '#514444' }}>
-                        #{index + 1}
-                      </Label>
-                      <Select 
-                        value={number} 
-                        onValueChange={(value) => handleNumberChange(index, value)}
-                      >
-                        <SelectTrigger className="w-full h-12">
-                          <SelectValue placeholder="?" />
-                        </SelectTrigger>
-                        <SelectContent>
-                          {Array.from({ length: 9 }, (_, i) => i + 1).map((num) => (
-                            <SelectItem key={num} value={num.toString()}>
-                              {num}
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
-                    </div>
-                  ))}
-                </div>
-
-                {/* Selected Numbers Display */}
-                <div className="text-center">
-                  <Label className="block mb-2" style={{ color: '#514444' }}>
-                    Your Ticket Number
-                  </Label>
-                  <div 
-                    className="inline-flex items-center justify-center px-4 py-2 rounded-lg border-2 min-w-32"
-                    style={{ 
-                      backgroundColor: isTicketComplete ? '#ffcd18' : '#F5EFE6',
-                      borderColor: isTicketComplete ? '#bc1f13' : '#D1D5DB',
-                      color: '#4c2815'
-                    }}
-                  >
-                    <span className="text-2xl font-bold tracking-wider">
-                      {selectedNumbers.join('') || '????'}
-                    </span>
-                  </div>
-                </div>
+            <div className="bg-white rounded-lg p-6 space-y-4">
+              <div className="flex justify-between text-sm" style={{ color: '#514444' }}>
+                <span>Ticket price</span>
+                <span className="font-bold">{formatUsd6(ticketPrice)}</span>
               </div>
-
-              <div className="text-center py-2">
-                <span className="text-lg" style={{ color: '#514444' }}>
-                  1 Ticket = $0.10
+              <div className="flex justify-between text-sm" style={{ color: '#514444' }}>
+                <span>Your USDC balance</span>
+                <span className={hasBalance ? '' : 'text-red-500'}>
+                  {formatUsd6(usdcBalance)}
                 </span>
               </div>
+              {hasAllowance && (
+                <div className="flex items-center gap-2 text-sm text-green-600">
+                  <Check className="h-4 w-4" /> Approval already set
+                </div>
+              )}
             </div>
 
-            <div className="space-y-3">
-              <Button
-                onClick={handleBuyTicket}
-                disabled={!isTicketComplete}
-                className="w-full py-3"
-                style={{ 
-                  backgroundColor: isTicketComplete ? '#bc1f13' : '#D1D5DB', 
-                  color: '#FFFFFF',
-                  opacity: isTicketComplete ? 1 : 0.6
-                }}
-              >
-                BUY TICKET
-              </Button>
-              
-              <button
-                onClick={onBack}
-                className="w-full text-sm opacity-60 hover:opacity-100 transition-opacity"
-                style={{ color: '#4c2815' }}
-              >
-                CANCEL
-              </button>
-            </div>
+            {!hasBalance && (
+              <p className="text-sm text-center text-red-500">
+                Insufficient USDC balance. You need {formatUsd6(ticketPrice)} to enter.
+              </p>
+            )}
+
+            <Button
+              onClick={handleApproveOrAdvance}
+              disabled={!hasBalance || isApprovePending || isApproveConfirming}
+              className="w-full py-3"
+              style={{ backgroundColor: '#bc1f13', color: '#FFFFFF' }}
+            >
+              {isApprovePending || isApproveConfirming ? (
+                <span className="flex items-center gap-2 justify-center">
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                  {isApprovePending ? 'Confirm in wallet…' : 'Approving…'}
+                </span>
+              ) : hasAllowance ? (
+                'CONTINUE'
+              ) : (
+                'APPROVE USDC'
+              )}
+            </Button>
           </div>
         );
 
@@ -243,44 +197,52 @@ export function Ticketing({ onBack, onSuccess }: TicketingProps) {
           <div className="space-y-6">
             <div className="text-center">
               <h2 className="text-2xl font-bold mb-4" style={{ color: '#514444' }}>
-                Choose a charity
+                Choose a Beneficiary
               </h2>
               <p style={{ color: '#514444' }}>
-                The charity with the most votes will receive $50.
+                Your vote decides which beneficiary receives a share of the pool.
               </p>
             </div>
 
             <div className="bg-white rounded-lg p-6">
-              <RadioGroup value={selectedCharity} onValueChange={setSelectedCharity}>
-                <div className="space-y-4">
-                  {charities.map((charity, index) => (
-                    <div key={index} className="flex items-center space-x-3 p-3 rounded-lg hover:bg-gray-50 transition-colors">
-                      <RadioGroupItem value={charity.name} id={charity.name} />
-                      <ImageWithFallback
-                        src={charity.logo}
-                        alt={`${charity.name} logo`}
-                        className="w-8 h-8 rounded-full object-cover"
-                      />
-                      <Label
-                        htmlFor={charity.name}
-                        className="flex-1 cursor-pointer"
-                        style={{ color: '#514444' }}
-                      >
-                        {charity.name}
-                      </Label>
-                    </div>
-                  ))}
-                </div>
-              </RadioGroup>
+              {beneficiaryOptions && beneficiaryOptions.length > 0 ? (
+                <RadioGroup value={selectedCharity} onValueChange={setSelectedCharity}>
+                  <div className="space-y-3">
+                    {beneficiaryOptions.map((addr) => (
+                      <div key={addr} className="flex items-center space-x-3 p-3 rounded-lg hover:bg-gray-50 transition-colors">
+                        <RadioGroupItem value={addr} id={addr} />
+                        <Label htmlFor={addr} className="flex-1 cursor-pointer font-mono text-sm" style={{ color: '#514444' }}>
+                          {addr.slice(0, 6)}…{addr.slice(-4)}
+                        </Label>
+                      </div>
+                    ))}
+                  </div>
+                </RadioGroup>
+              ) : (
+                <p className="text-sm text-center opacity-60" style={{ color: '#514444' }}>
+                  No beneficiaries registered for this raffle.
+                </p>
+              )}
             </div>
 
             <Button
-              onClick={handleVote}
-              disabled={!selectedCharity}
+              onClick={handleEnter}
+              disabled={
+                (!selectedCharity && !!beneficiaryOptions?.length) ||
+                isEnterPending ||
+                isEnterConfirming
+              }
               className="w-full py-3"
               style={{ backgroundColor: '#bc1f13', color: '#FFFFFF' }}
             >
-              VOTE
+              {isEnterPending || isEnterConfirming ? (
+                <span className="flex items-center gap-2 justify-center">
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                  {isEnterPending ? 'Confirm in wallet…' : 'Entering raffle…'}
+                </span>
+              ) : (
+                `ENTER RAFFLE — ${formatUsd6(ticketPrice)}`
+              )}
             </Button>
           </div>
         );
@@ -298,30 +260,16 @@ export function Ticketing({ onBack, onSuccess }: TicketingProps) {
           size="icon"
           onClick={onBack}
           className="mr-2 hover:bg-transparent"
-          style={{ 
-            color: '#FFFFFF',
-            backgroundColor: 'transparent',
-            transition: 'all 0.2s ease'
-          }}
-          onMouseEnter={(e) => {
-            e.currentTarget.style.color = '#bc1f13';
-            e.currentTarget.style.backgroundColor = '#FFFFFF';
-          }}
-          onMouseLeave={(e) => {
-            e.currentTarget.style.color = '#FFFFFF';
-            e.currentTarget.style.backgroundColor = 'transparent';
-          }}
+          style={{ color: '#FFFFFF', backgroundColor: 'transparent', transition: 'all 0.2s ease' }}
+          onMouseEnter={(e) => { e.currentTarget.style.color = '#bc1f13'; e.currentTarget.style.backgroundColor = '#FFFFFF'; }}
+          onMouseLeave={(e) => { e.currentTarget.style.color = '#FFFFFF'; e.currentTarget.style.backgroundColor = 'transparent'; }}
         >
           <ArrowLeft className="h-6 w-6" />
         </Button>
         <h1 className="text-2xl font-bold" style={{ color: '#FFFFFF' }}>Join Raffle</h1>
       </div>
 
-      <ProgressStepper
-        currentStep={currentStep}
-        totalSteps={steps.length}
-        steps={steps}
-      />
+      <ProgressStepper currentStep={currentStep} totalSteps={steps.length} steps={steps} />
 
       <div className="max-w-md mx-auto">
         {renderStep()}

@@ -65,14 +65,31 @@ export const RaffleVaultAbi = [
     outputs: [{ name: "", type: "uint256" }],
   },
   {
-    name: "commitEntry",
+    name: "enterRaffle",
     type: "function",
     stateMutability: "nonpayable",
     inputs: [
-      { name: "commitmentHash", type: "bytes32" },
+      { name: "token", type: "address" },
       { name: "beneficiaryVote", type: "address" },
     ],
     outputs: [],
+  },
+  {
+    name: "params",
+    type: "function",
+    stateMutability: "view",
+    inputs: [],
+    outputs: [
+      { name: "name", type: "string" },
+      { name: "description", type: "string" },
+      { name: "ticketPriceUsd6", type: "uint256" },
+      { name: "maxEntriesPerUser", type: "uint256" },
+      { name: "numWinners", type: "uint256" },
+      { name: "winnerShareBps", type: "uint256" },
+      { name: "beneficiaryShareBps", type: "uint256" },
+      { name: "agentsOnly", type: "bool" },
+      { name: "minUniqueParticipants", type: "uint256" },
+    ],
   },
   {
     name: "getBeneficiaryOptions",
