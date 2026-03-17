@@ -6,7 +6,7 @@
 
 import WDK from "@tetherto/wdk";
 import WalletManagerEvm from "@tetherto/wdk-wallet-evm";
-import { mnemonicToAccount, nonceManager } from "viem/accounts";
+import { mnemonicToAccount } from "viem/accounts";
 import { createWalletClient, http, defineChain, type Address, type WalletClient } from "viem";
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from "fs";
 import { resolve, dirname } from "path";
@@ -127,7 +127,7 @@ export function getPlayerWalletClient(
     rpcUrls: { default: { http: [rpcUrl] } },
   });
 
-  const account = mnemonicToAccount(mnemonic, { addressIndex: index, nonceManager });
+  const account = mnemonicToAccount(mnemonic, { addressIndex: index });
   const client = createWalletClient({ account, chain, transport: http(rpcUrl) });
   _walletClientCache.set(cacheKey, client);
   return client;
