@@ -85,18 +85,18 @@ async function syncParticipants(vault: Address, participantCount: bigint): Promi
   // If DB already has all participants, skip
   if (existingAddrs.size >= count && count > 0) return;
 
-  const ParticipantsAbi = [
-    { name: "participants", type: "function", stateMutability: "view", inputs: [{ name: "", type: "uint256" }], outputs: [{ name: "", type: "address" }] },
+  const GetParticipantsAbi = [
+    { name: "getParticipants", type: "function", stateMutability: "view", inputs: [], outputs: [{ name: "", type: "address[]" }] },
   ] as const;
 
+  // getParticipants() returns all ticket entries (with duplicates per user)
+  const allEntries = (await publicClient.readContract({
+    address: vault, abi: GetParticipantsAbi, functionName: "getParticipants",
+  })) as string[];
+
   const seen = new Map<string, number>();
-  for (let i = 0; i < count && i < 100; i++) {
-    try {
-      const addr = (await publicClient.readContract({
-        address: vault, abi: ParticipantsAbi, functionName: "participants", args: [BigInt(i)],
-      })) as string;
-      seen.set(addr.toLowerCase(), (seen.get(addr.toLowerCase()) || 0) + 1);
-    } catch { break; }
+  for (const addr of allEntries) {
+    seen.set(addr.toLowerCase(), (seen.get(addr.toLowerCase()) || 0) + 1);
   }
 
   // Only resolve new participants
