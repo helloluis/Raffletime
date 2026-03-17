@@ -52,6 +52,17 @@ async function buildRafflesTableHtml(opts: { limit?: number; page?: number; show
         } catch {}
       }
 
+      // Batch-load all winners in a single query (avoids N+1 per settled raffle)
+      const vaults = dbRaffles.map((r: any) => r.vault);
+      const resultMap = new Map<string, any>();
+      try {
+        const results = await db.query(
+          `SELECT * FROM raffle_results WHERE vault = ANY($1)`,
+          [vaults]
+        );
+        for (const res of results) resultMap.set(res.vault, res);
+      } catch {}
+
       for (const r of dbRaffles) {
         const vault = r.vault;
         const name = r.name || "House Raffle";
@@ -67,17 +78,15 @@ async function buildRafflesTableHtml(opts: { limit?: number; page?: number; show
         } else if (state === "SETTLED") {
           const dt = r.settled_at ? new Date(r.settled_at) : new Date(r.closes_at);
           statusHtml = `&#10003; ${String(dt.getMonth()+1).padStart(2,'0')}/${String(dt.getDate()).padStart(2,'0')} ${String(dt.getHours()).padStart(2,'0')}:${String(dt.getMinutes()).padStart(2,'0')}`;
-          try {
-            const result = await db.getResult(vault);
-            if (result?.winner) {
-              const w = result.winner;
-              const wName = result.winner_name;
-              const short = `${w.slice(0,6)}...${w.slice(-4)}`;
-              winnerHtml = wName
-                ? `${houseIcon}<strong>${wName}</strong> <a href="https://sepolia.celoscan.io/address/${w}" target="_blank" style="color:inherit">${short}</a>`
-                : `<a href="https://sepolia.celoscan.io/address/${w}" target="_blank">${short}</a>`;
-            }
-          } catch {}
+          const result = resultMap.get(vault);
+          if (result?.winner) {
+            const w = result.winner;
+            const wName = result.winner_name;
+            const short = `${w.slice(0,6)}...${w.slice(-4)}`;
+            winnerHtml = wName
+              ? `${houseIcon}<strong>${wName}</strong> <a href="https://sepolia.celoscan.io/address/${w}" target="_blank" style="color:inherit">${short}</a>`
+              : `<a href="https://sepolia.celoscan.io/address/${w}" target="_blank">${short}</a>`;
+          }
         } else if (state === "INVALID") {
           const dt = r.settled_at ? new Date(r.settled_at) : new Date(r.closes_at);
           statusHtml = `${String(dt.getMonth()+1).padStart(2,'0')}/${String(dt.getDate()).padStart(2,'0')} ${String(dt.getHours()).padStart(2,'0')}:${String(dt.getMinutes()).padStart(2,'0')}`;
