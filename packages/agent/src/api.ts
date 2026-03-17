@@ -510,13 +510,6 @@ export function createApi(): Hono {
       const send = async () => {
         try {
           let vault = (await import("./scheduler.js")).getCurrentVault();
-          // In read-only mode, find active raffle from on-chain registry
-          if (!vault) {
-            try {
-              const active = await getActiveRaffles();
-              if (active.length > 0) vault = active[0] as Address;
-            } catch {}
-          }
           if (!vault) {
             const json = JSON.stringify({ state: "WAITING", vault: null });
             if (json !== lastJson) {
@@ -526,35 +519,28 @@ export function createApi(): Hono {
             return;
           }
 
-          const info = await getRaffleInfo(vault);
+          // Read from DB — never from chain. Scheduler keeps DB in sync every 15s.
+          const dbRaffle = await db.getRaffle(vault);
+          if (!dbRaffle) return; // DB not yet written for this vault, skip
+
           const meta = getRaffleMeta(vault);
-          const onChainName = meta?.name || await getRaffleName(vault);
-
-          // Try to get winners if in PAYOUT or SETTLED state
-          let winners: string[] = [];
-          if (info.state === RaffleState.PAYOUT || info.state === RaffleState.SETTLED) {
-            try {
-              const w = await publicClient.readContract({
-                address: vault,
-                abi: RaffleVaultAbi,
-                functionName: "getWinners",
-              });
-              winners = (w as string[]).map(String);
-            } catch {}
-          }
-
           const serverPhase = getServerPhase();
+
+          // Winners from DB results table (only populated post-settlement)
+          const dbResult = await db.getResult(vault).catch(() => null);
+          const winners = dbResult?.winner ? [dbResult.winner] : [];
+
           const data = {
             vault,
-            state: RaffleState[info.state],
+            state: dbRaffle.state,
             phase: serverPhase.phase,
             phaseChangedAt: serverPhase.changedAt,
             phaseWinner: serverPhase.winner,
-            pool: (Number(info.totalPool) / 1e6).toFixed(2),
-            participants: info.participantCount.toString(),
-            closesAt: Number(info.closesAt) * 1000,
-            name: onChainName || "House Raffle",
-            type: meta?.type || "house",
+            pool: dbRaffle.pool || "0",
+            participants: (dbRaffle.participants ?? 0).toString(),
+            closesAt: dbRaffle.closes_at ? new Date(dbRaffle.closes_at).getTime() : 0,
+            name: dbRaffle.name || "House Raffle",
+            type: meta?.type || dbRaffle.type || "house",
             ticketPrice: formatUsd6(config.raffle.ticketPriceUsd6),
             winners,
           };
@@ -565,20 +551,18 @@ export function createApi(): Hono {
           }
 
           // Emit settled event when a raffle completes (for live history table update)
-          if ((info.state === RaffleState.SETTLED || info.state === RaffleState.INVALID) && vault !== sentSettledFor) {
+          if ((dbRaffle.state === "SETTLED" || dbRaffle.state === "INVALID") && vault !== sentSettledFor) {
             sentSettledFor = vault;
-            const closesAtTs = Number(info.closesAt);
-            const dt = new Date(closesAtTs * 1000);
+            const dt = dbRaffle.closes_at ? new Date(dbRaffle.closes_at) : new Date();
             const dateStr = `${String(dt.getMonth()+1).padStart(2,'0')}/${String(dt.getDate()).padStart(2,'0')} ${String(dt.getHours()).padStart(2,'0')}:${String(dt.getMinutes()).padStart(2,'0')}`;
-            const pool = formatCash((Number(info.totalPool) / 1e6).toFixed(2));
             const settled = {
               vault,
               ended: dateStr,
-              pool,
-              participants: info.participantCount.toString(),
-              state: RaffleState[info.state],
+              pool: formatCash(dbRaffle.pool || "0"),
+              participants: (dbRaffle.participants ?? 0).toString(),
+              state: dbRaffle.state,
               winners,
-              name: data.name,
+              name: dbRaffle.name || "House Raffle",
             };
             await stream.writeSSE({ data: JSON.stringify(settled), event: "settled" });
           }
