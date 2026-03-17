@@ -1417,20 +1417,21 @@ export function createApi(): Hono {
     }
 
     try {
-      // Read from DB first, fallback to chain
+      // For active raffles always read live from chain; use DB only for settled/invalid
       let stateNum = 0;
       let totalPoolStr = "0";
       let participantCountStr = "0";
       let closesAtTs = 0;
       const dbRaffle = await db.getRaffle(address);
-      if (dbRaffle) {
+      const isFinalized = dbRaffle?.state === "SETTLED" || dbRaffle?.state === "INVALID";
+      if (dbRaffle && isFinalized) {
         const stateMap: Record<string, number> = { OPEN: 1, CLOSED: 2, DRAWING: 3, PAYOUT: 4, SETTLED: 5, INVALID: 6 };
         stateNum = stateMap[dbRaffle.state] || 0;
         totalPoolStr = dbRaffle.pool || "0";
         participantCountStr = dbRaffle.participants?.toString() || "0";
         closesAtTs = dbRaffle.closes_at ? Math.floor(new Date(dbRaffle.closes_at).getTime() / 1000) : 0;
       } else {
-        // DB miss — read from chain
+        // Live read from chain for open/in-progress raffles
         const info = await getRaffleInfo(address);
         stateNum = info.state;
         totalPoolStr = (Number(info.totalPool) / 1e6).toString();
