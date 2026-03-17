@@ -69,10 +69,11 @@ export async function upsertRaffle(raffle: {
   settledAt?: Date;
   coverImage?: string;
   creator?: string;
+  vrfRequestId?: string;
 }) {
   await pool.query(
-    `INSERT INTO raffles (vault, name, type, state, pool, participants, ticket_price, closes_at, settled_at, cover_image, creator, updated_at)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, now())
+    `INSERT INTO raffles (vault, name, type, state, pool, participants, ticket_price, closes_at, settled_at, cover_image, creator, vrf_request_id, updated_at)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, now())
      ON CONFLICT (vault) DO UPDATE SET
        name = COALESCE($2, raffles.name),
        type = COALESCE($3, raffles.type),
@@ -84,6 +85,7 @@ export async function upsertRaffle(raffle: {
        settled_at = COALESCE($9, raffles.settled_at),
        cover_image = COALESCE($10, raffles.cover_image),
        creator = COALESCE($11, raffles.creator),
+       vrf_request_id = COALESCE($12, raffles.vrf_request_id),
        updated_at = now()`,
     [
       raffle.vault.toLowerCase(),
@@ -97,6 +99,7 @@ export async function upsertRaffle(raffle: {
       raffle.settledAt || null,
       raffle.coverImage || null,
       raffle.creator || null,
+      raffle.vrfRequestId || null,
     ]
   );
 }
@@ -160,13 +163,23 @@ export async function getEntriesForRaffle(vault: string) {
 
 // ============ Results ============
 
-export async function recordResult(vault: string, winner: string, winnerName: string | null, prize: string) {
+export async function recordResult(
+  vault: string,
+  winner: string,
+  winnerName: string | null,
+  prize: string,
+  vrf?: { requestId: string; seed: string; fulfillmentTx: string }
+) {
   await pool.query(
-    `INSERT INTO raffle_results (vault, winner, winner_name, prize, settled_at)
-     VALUES ($1, $2, $3, $4, now())
+    `INSERT INTO raffle_results (vault, winner, winner_name, prize, settled_at, vrf_request_id, vrf_seed, vrf_fulfillment_tx)
+     VALUES ($1, $2, $3, $4, now(), $5, $6, $7)
      ON CONFLICT (vault) DO UPDATE SET
-       winner = $2, winner_name = $3, prize = $4, settled_at = now()`,
-    [vault.toLowerCase(), winner.toLowerCase(), winnerName, prize]
+       winner = $2, winner_name = $3, prize = $4, settled_at = now(),
+       vrf_request_id = COALESCE($5, raffle_results.vrf_request_id),
+       vrf_seed = COALESCE($6, raffle_results.vrf_seed),
+       vrf_fulfillment_tx = COALESCE($7, raffle_results.vrf_fulfillment_tx)`,
+    [vault.toLowerCase(), winner.toLowerCase(), winnerName, prize,
+     vrf?.requestId || null, vrf?.seed || null, vrf?.fulfillmentTx || null]
   );
 }
 

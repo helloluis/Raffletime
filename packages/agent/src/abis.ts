@@ -183,6 +183,16 @@ export const RaffleVaultAbi = [
       { name: "winningBeneficiary", type: "address", indexed: false },
     ],
   },
+  {
+    name: "DrawRequested",
+    type: "event",
+    inputs: [{ name: "requestId", type: "uint256", indexed: false }],
+  },
+  {
+    name: "DrawCompleted",
+    type: "event",
+    inputs: [{ name: "seed", type: "uint256", indexed: false }],
+  },
 ] as const;
 
 export const RaffleRegistryAbi = [

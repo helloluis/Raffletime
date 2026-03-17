@@ -405,8 +405,9 @@ export async function closeRaffle(vault: Address): Promise<void> {
 }
 
 /** Request draw and auto-fulfill if MOCK_VRF_DISPATCHER_ADDRESS is set (testnet only).
- *  With real Chainlink VRF, fulfillment is automatic via callback — no follow-up needed. */
-export async function requestDraw(vault: Address): Promise<void> {
+ *  With real Chainlink VRF, fulfillment is automatic via callback — no follow-up needed.
+ *  Returns the VRF requestId for storage. */
+export async function requestDraw(vault: Address): Promise<string | null> {
   console.log("[lifecycle] Requesting draw:", vault);
   const hash = await writeContract({
     address: vault,
@@ -416,33 +417,62 @@ export async function requestDraw(vault: Address): Promise<void> {
   const receipt = await publicClient.waitForTransactionReceipt({ hash });
   console.log("[lifecycle] Draw requested:", hash);
 
+  // Parse DrawRequested event to capture VRF requestId
+  let requestId: bigint | null = null;
+  try {
+    const logs = parseEventLogs({ abi: RaffleVaultAbi, logs: receipt.logs, eventName: "DrawRequested" });
+    if (logs.length > 0) {
+      requestId = (logs[0] as any).args.requestId as bigint;
+      console.log(`[lifecycle] VRF requestId: ${requestId}`);
+    }
+  } catch {}
+
   // Testnet only: auto-fulfill via MockVRFDispatcher
   const mockAddr = process.env.MOCK_VRF_DISPATCHER_ADDRESS as Address | undefined;
-  if (!mockAddr) return;
-
-  try {
-    // Parse DrawRequested event to get the VRF requestId
-    const DrawRequestedAbi = [{
-      name: "DrawRequested", type: "event" as const,
-      inputs: [{ name: "requestId", type: "uint256", indexed: false }],
-    }];
-    const logs = parseEventLogs({ abi: DrawRequestedAbi, logs: receipt.logs });
-    if (logs.length === 0) {
-      console.log("[lifecycle] DrawRequested event not found — raffle may have gone INVALID");
-      return;
+  if (mockAddr && requestId !== null) {
+    try {
+      console.log(`[lifecycle] Auto-fulfilling mock VRF requestId=${requestId}...`);
+      const fulfillHash = await writeContract({
+        address: mockAddr,
+        abi: MockVRFDispatcherAbi,
+        functionName: "fulfillRequest",
+        args: [requestId],
+      });
+      await publicClient.waitForTransactionReceipt({ hash: fulfillHash });
+      console.log("[lifecycle] Mock VRF fulfilled:", fulfillHash);
+    } catch (e) {
+      console.log("[lifecycle] Mock VRF auto-fulfill failed:", String(e).slice(0, 120));
     }
-    const requestId = (logs[0] as any).args.requestId as bigint;
-    console.log(`[lifecycle] Auto-fulfilling mock VRF requestId=${requestId}...`);
-    const fulfillHash = await writeContract({
-      address: mockAddr,
-      abi: MockVRFDispatcherAbi,
-      functionName: "fulfillRequest",
-      args: [requestId],
+  }
+
+  return requestId !== null ? requestId.toString() : null;
+}
+
+/**
+ * Query vault logs for DrawCompleted event to get the VRF seed and fulfillment tx.
+ * Called once when we detect PAYOUT state — Chainlink has already fulfilled by this point.
+ */
+export async function getVrfProof(vault: Address): Promise<{ seed: string; fulfillmentTx: string } | null> {
+  try {
+    const latest = await publicClient.getBlockNumber();
+    const fromBlock = latest > 500n ? latest - 500n : 0n; // ~17 min lookback on Base Sepolia
+    const logs = await publicClient.getLogs({
+      address: vault,
+      event: {
+        name: "DrawCompleted",
+        type: "event",
+        inputs: [{ name: "seed", type: "uint256", indexed: false }],
+      },
+      fromBlock,
+      toBlock: "latest",
     });
-    await publicClient.waitForTransactionReceipt({ hash: fulfillHash });
-    console.log("[lifecycle] Mock VRF fulfilled:", fulfillHash);
+    if (logs.length === 0) return null;
+    const log = logs[0];
+    const seed = (log as any).args.seed as bigint;
+    return { seed: seed.toString(), fulfillmentTx: log.transactionHash };
   } catch (e) {
-    console.log("[lifecycle] Mock VRF auto-fulfill failed:", String(e).slice(0, 120));
+    console.log("[lifecycle] getVrfProof failed:", String(e).slice(0, 120));
+    return null;
   }
 }
 
@@ -514,7 +544,10 @@ export async function advanceRaffle(vault: Address): Promise<RaffleState> {
       console.log(
         `[lifecycle] Raffle closed with ${info.participantCount} participants. Requesting draw...`
       );
-      await requestDraw(vault);
+      const requestId = await requestDraw(vault);
+      if (requestId) {
+        try { await db.upsertRaffle({ vault, vrfRequestId: requestId }); } catch {}
+      }
       return await getVaultState(vault);
 
     case RaffleState.DRAWING:
@@ -525,6 +558,9 @@ export async function advanceRaffle(vault: Address): Promise<RaffleState> {
       break;
 
     case RaffleState.PAYOUT:
+      // Capture VRF proof before distributing (Chainlink has already fulfilled by now)
+      const vrfProof = await getVrfProof(vault);
+      const vrfRequestId = (await db.getRaffle(vault))?.vrf_request_id || null;
       await distributePrizes(vault);
       // Sync all participant identities to DB, then record result
       try {
@@ -534,7 +570,9 @@ export async function advanceRaffle(vault: Address): Promise<RaffleState> {
         })) as string[];
         if (winners.length > 0) {
           const winnerName = await resolveAgentName(winners[0] as Address);
-          await db.recordResult(vault, winners[0], winnerName, (Number(info.totalPool) / 1e6).toFixed(2));
+          const vrf = vrfProof ? { requestId: vrfRequestId || "", seed: vrfProof.seed, fulfillmentTx: vrfProof.fulfillmentTx } : undefined;
+          await db.recordResult(vault, winners[0], winnerName, (Number(info.totalPool) / 1e6).toFixed(2), vrf);
+          if (vrfProof) console.log(`[lifecycle] VRF seed: ${vrfProof.seed}, fulfillment: ${vrfProof.fulfillmentTx}`);
           console.log(`[lifecycle] Winner: ${winnerName || winners[0].slice(0,10)} won $${(Number(info.totalPool) / 1e6).toFixed(2)}`);
           setServerPhase("RESULT", { address: winners[0], name: winnerName, prize: (Number(info.totalPool) / 1e6).toFixed(2) });
 

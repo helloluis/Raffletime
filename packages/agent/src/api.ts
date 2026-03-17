@@ -1469,24 +1469,29 @@ Content-Type: application/json
             </ol>
           </div>`;
       } else if (info.state === RaffleState.SETTLED) {
-        let drawDetailsHtml = "";
-        try {
-          const dbRaffle = await db.getRaffle(address);
-          if (dbRaffle?.draw_tx) {
-            const isMock = !!process.env.MOCK_RANDOMNESS_ADDRESS;
-            const oracleName = isMock ? "MockVRFDispatcher (testnet)" : '<a href="https://docs.chain.link/vrf" target="_blank" style="color:inherit;border-bottom:1px dashed #000">Chainlink VRF v2.5</a>';
-            drawDetailsHtml = `
-            <table class="info-table" style="margin-top:0.75rem">
-              <tr><td>Oracle</td><td>${oracleName}</td></tr>
-              <tr><td>Draw Tx</td><td><a href="https://sepolia.celoscan.io/tx/${dbRaffle.draw_tx}" target="_blank" style="color:inherit;border-bottom:1px dashed #000">${dbRaffle.draw_tx.slice(0,10)}...${dbRaffle.draw_tx.slice(-8)}</a></td></tr>
-            </table>`;
-          }
-        } catch {}
+        const dbRaffle = await db.getRaffle(address).catch(() => null);
         const dbResult = await db.getResult(address).catch(() => null);
+        const isMock = !!process.env.MOCK_VRF_DISPATCHER_ADDRESS;
+        const basescanBase = `https://sepolia.basescan.org/tx/`;
+        const txLink = (hash: string) =>
+          `<a href="${basescanBase}${hash}" target="_blank" style="color:inherit;border-bottom:1px dashed currentColor;font-family:monospace">${hash.slice(0,10)}...${hash.slice(-8)}</a>`;
+
         const winnerLine = dbResult?.winner
           ? `<p style="margin-top:0.5rem"><strong>Winner:</strong> ${dbResult.winner_name ? houseIcon + '<strong>' + dbResult.winner_name + '</strong> ' : ''}${explorerLink(dbResult.winner, config.chainId)} — <strong>${formatCash(dbResult.prize)}</strong></p>`
           : "";
-        actionHtml = `<div class="section"><h2>Results</h2><p>This raffle has been settled. Winners have been paid.</p>${winnerLine}${drawDetailsHtml}</div>`;
+
+        const vrfRows = [];
+        vrfRows.push(`<tr><td>Oracle</td><td>${isMock ? "MockVRFDispatcher (testnet)" : '<a href="https://docs.chain.link/vrf" target="_blank" style="color:inherit;border-bottom:1px dashed currentColor">Chainlink VRF v2.5</a>'}</td></tr>`);
+        if (dbRaffle?.vrf_request_id) vrfRows.push(`<tr><td>Request ID</td><td style="font-family:monospace;word-break:break-all">${dbRaffle.vrf_request_id}</td></tr>`);
+        if (dbRaffle?.draw_tx)        vrfRows.push(`<tr><td>Request Tx</td><td>${txLink(dbRaffle.draw_tx)}</td></tr>`);
+        if (dbResult?.vrf_seed)       vrfRows.push(`<tr><td>Random Seed</td><td style="font-family:monospace;word-break:break-all">${dbResult.vrf_seed}</td></tr>`);
+        if (dbResult?.vrf_fulfillment_tx) vrfRows.push(`<tr><td>Fulfillment Tx</td><td>${txLink(dbResult.vrf_fulfillment_tx)}</td></tr>`);
+
+        const vrfTable = vrfRows.length > 1
+          ? `<table class="info-table" style="margin-top:0.75rem">${vrfRows.join("")}</table>`
+          : "";
+
+        actionHtml = `<div class="section"><h2>Results</h2><p>This raffle has been settled. Winners have been paid.</p>${winnerLine}${vrfTable}</div>`;
       } else {
         actionHtml = `<div class="section"><p>This raffle is currently in ${stateLabel(stateStr)} state.</p></div>`;
       }
