@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { Button } from './ui/button';
 import { ChevronLeft, ChevronRight } from 'lucide-react';
 import { Sparkles } from './Sparkles';
@@ -38,13 +38,18 @@ export function FeaturedRafflesCarousel({ onJoinRaffle, onCreateRaffle, onNaviga
   const hasJustReachedZero = isCountdownZero && hasCountdownStarted && 
     (previousTimeLeft.minutes > 0 || previousTimeLeft.seconds > 0);
 
-  // Countdown timer — uses raffle closesAt from API
+  // Keep a ref to the current slide's closesAt so the timer always reads fresh data
+  const closesAtRef = useRef<string | undefined>(undefined);
+  useEffect(() => {
+    const currentSlideData = slides[currentSlide];
+    closesAtRef.current = currentSlideData?.type === 'raffle' && 'closesAt' in currentSlideData
+      ? (currentSlideData as any).closesAt : undefined;
+  }, [slides, currentSlide]);
+
+  // Countdown timer — reads closesAt via ref to avoid stale closure
   useEffect(() => {
     const updateCountdown = () => {
-      const currentSlideData = slides[currentSlide];
-      const closesAt = currentSlideData?.type === 'raffle' && 'closesAt' in currentSlideData
-        ? (currentSlideData as any).closesAt : undefined;
-
+      const closesAt = closesAtRef.current;
       let diff: number;
       if (closesAt) {
         diff = new Date(closesAt).getTime() - Date.now();
@@ -59,14 +64,12 @@ export function FeaturedRafflesCarousel({ onJoinRaffle, onCreateRaffle, onNaviga
 
       const minutes = Math.floor(diff / (1000 * 60));
       const seconds = Math.floor((diff % (1000 * 60)) / 1000);
-      
-      // Update time using functional updates to avoid dependency issues
+
       setTimeLeft(prevTime => {
         setPreviousTimeLeft(prevTime);
         return { minutes, seconds };
       });
-      
-      // Mark countdown as started after first update (prevents immediate trigger on page load)
+
       if (!hasCountdownStarted && (minutes > 0 || seconds > 0)) {
         setHasCountdownStarted(true);
       }
@@ -159,7 +162,7 @@ export function FeaturedRafflesCarousel({ onJoinRaffle, onCreateRaffle, onNaviga
       title: `${raffle.name || 'Raffle'} ${typeEmoji}`,
       prizeAmount: pool > 0 ? `$${pool.toFixed(2)}` : 'Waiting for entries',
       totalPool: `TOTAL POOL $${pool.toFixed(2)}`,
-      status: raffle.state === 'OPEN' ? 'Drawing soon!' : raffle.state,
+      status: raffle.state === 'OPEN' ? 'Drawing soon!' : '',
       background: treasureChestImage,
       address: raffle.address,
       raffleType: raffle.type,
