@@ -152,12 +152,15 @@ async function tick(seedPassword: string): Promise<void> {
       const ticketCount = 1 + Math.floor(Math.random() * 5); // 1-5 tickets
       try {
         for (let t = 0; t < ticketCount; t++) {
-          const { entered } = await enterRaffle(seedPassword, vault as Address, [player]);
+          const { entered, skipped } = await enterRaffle(seedPassword, vault as Address, [player]);
           if (entered.length > 0 && t === 0) {
             earlyWavePlayers.push(player.name);
           }
           if (entered.length > 0) {
             console.log(`[daemon] ☕ ${player.name} ticket ${t+1}/${ticketCount}`);
+          } else if (skipped.length > 0) {
+            console.log(`[daemon] ⚠ early-wave skip: ${skipped[0]}`);
+            break; // no point continuing tickets for this player
           }
           // Min 5s between tickets for the same player
           if (t < ticketCount - 1) {
