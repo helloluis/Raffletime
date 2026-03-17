@@ -68,6 +68,16 @@ export async function recoverExistingRaffle(): Promise<void> {
           state !== RaffleState.SETTLED &&
           state !== RaffleState.INVALID
         ) {
+          // Sanity check: skip vaults with unreasonably far closesAt (> 25h from now)
+          // This handles the case where old code created a raffle with a bad duration
+          const nowSecs = BigInt(Math.floor(Date.now() / 1000));
+          const maxClosesAt = nowSecs + 90000n; // 25 hours
+          if (state === RaffleState.OPEN && info.closesAt > maxClosesAt) {
+            console.log(
+              `[scheduler] Skipping vault with far-future closesAt (${info.closesAt}): ${vaultAddr}`
+            );
+            continue;
+          }
           currentVault = vaultAddr as Address;
           console.log(
             `[scheduler] Recovered existing raffle: ${currentVault} (state=${state})`
