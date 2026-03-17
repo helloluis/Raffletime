@@ -134,7 +134,7 @@ const FORGE = findFoundryBin("forge");
 const CAST = findFoundryBin("cast");
 
 function getRpcUrl(): string {
-  return getEnv().RPC_URL || "https://forno.celo-sepolia.celo-testnet.org";
+  return getEnv().RPC_URL || "https://sepolia.base.org";
 }
 
 function getPrivateKey(): string {
@@ -581,7 +581,7 @@ async function handleTool(
 
     case "mint_test_tokens": {
       const token = getEnv().PAYMENT_TOKEN_ADDRESS;
-      const amount = (args.amount as string) || "100000000000000000000";
+      const amount = (args.amount as string) || "100000000"; // 1e8 = 100 USDC (6 decimals)
       const pk = getPrivateKey();
       return castSend({
         to: token, sig: "mint(address,uint256)",
@@ -601,7 +601,7 @@ async function handleTool(
       const token = getEnv().PAYMENT_TOKEN_ADDRESS;
       const agentReg = getEnv().AGENT_REGISTRY_ADDRESS;
       const pk = args.private_key as string;
-      const bond = (args.bond_amount as string) || "1000000000000000000";
+      const bond = (args.bond_amount as string) || "1000000"; // 1e6 = $1 USDC
       const uri = (args.uri as string) || "https://example.com/test-agent.json";
 
       // Step 1: Approve bond (nonce N)
@@ -625,7 +625,7 @@ async function handleTool(
         (args.beneficiary_vote as string) ||
         (getEnv().BENEFICIARIES || "").split(",")[0];
       const price =
-        (args.ticket_price as string) || getEnv().TICKET_PRICE || "100000000000000000";
+        (args.ticket_price as string) || getEnv().TICKET_PRICE_USD6 || "100000"; // 1e5 = $0.10 USDC
 
       // Step 1: Approve ticket price (nonce N)
       const approve = castSend({
@@ -710,7 +710,7 @@ async function handleTool(
       // Wait a moment for startup (cross-platform)
       await new Promise(r => setTimeout(r, 3000));
       try {
-        const health = execSync("curl -s http://localhost:3000/api/health", {
+        const health = execSync("curl -s https://agent.raffletime.io/api/health", {
           encoding: "utf-8",
           timeout: 5000,
         });
@@ -731,7 +731,7 @@ async function handleTool(
 
     case "agent_health": {
       try {
-        const health = execSync("curl -s http://localhost:3000/api/health", {
+        const health = execSync("curl -s https://agent.raffletime.io/api/health", {
           encoding: "utf-8",
           timeout: 5000,
         });
@@ -746,14 +746,14 @@ async function handleTool(
       const pk = getPrivateKey();
       const token = env.PAYMENT_TOKEN_ADDRESS;
       const agentReg = env.AGENT_REGISTRY_ADDRESS;
-      const bond = "1000000000000000000"; // 1e18 = $1
-      const ticketPrice = env.TICKET_PRICE || "100000000000000000"; // 0.1
+      const bond = "1000000"; // 1e6 = $1 USDC
+      const ticketPrice = env.TICKET_PRICE_USD6 || "100000"; // 1e5 = $0.10 USDC
 
       // Determine vault — use provided or fetch from agent API
       let vault = args.vault as string;
       if (!vault) {
         try {
-          const health = execSync("curl -s http://localhost:3000/api/raffles/current", {
+          const health = execSync("curl -s https://agent.raffletime.io/api/raffles/current", {
             encoding: "utf-8", timeout: 5000,
           });
           const parsed = JSON.parse(health);
@@ -833,10 +833,10 @@ async function handleTool(
       // Fund new wallets with CELO
       const newWallets = wallets.filter(w => w.isNew);
       if (newWallets.length > 0) {
-        results.push("--- Funding new agents with CELO ---");
+        results.push("--- Funding new agents with ETH ---");
         for (const w of newWallets) {
           castSend({ to: w.address, pk, rpc, value: "100000000000000000" }); // 0.1 CELO
-          results.push(`  ${w.name.padEnd(16)} funded 0.1 CELO`);
+          results.push(`  ${w.name.padEnd(16)} funded 0.1 ETH`);
         }
         results.push('');
       }
@@ -850,7 +850,7 @@ async function handleTool(
           to: token, sig: "mint(address,uint256)",
           args: [w.address, amount.toString()], pk, rpc,
         });
-        results.push(`  ${w.name.padEnd(16)} minted $${(Number(amount) / 1e18).toFixed(2)}`);
+        results.push(`  ${w.name.padEnd(16)} minted $${(Number(amount) / 1e6).toFixed(2)}`);
       }
       results.push('');
 
@@ -925,7 +925,7 @@ async function handleTool(
         const state = exec(`"${CAST}" call ${vault} "state()(uint8)" --rpc-url ${rpc}`).trim();
         const pool = exec(`"${CAST}" call ${vault} "totalPool()(uint256)" --rpc-url ${rpc}`).trim();
         const participants = exec(`"${CAST}" call ${vault} "getParticipantCount()(uint256)" --rpc-url ${rpc}`).trim();
-        const poolEth = Number(BigInt(pool.split(" ")[0])) / 1e18;
+        const poolEth = Number(BigInt(pool.split(" ")[0])) / 1e6;
         results.push(`=== Raffle Status ===`);
         results.push(`  State: OPEN`);
         results.push(`  Pool: $${poolEth.toFixed(2)}`);
