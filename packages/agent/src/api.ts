@@ -751,8 +751,9 @@ export function createApi(): Hono {
     const ticketPrice = formatUsd6(config.raffle.ticketPriceUsd6);
 
     return c.html(layout("Home", `
-    <h1 class="site-title"><span>Raffle</span>time <span class="testnet-pill">Testnet</span></h1>
+    <h1 class="site-title"><span>Raffle</span>time <span class="testnet-pill">Testnet</span> <span id="utc-clock" style="font-size:0.35em;font-weight:400;font-family:monospace;opacity:0.7;vertical-align:middle"></span></h1>
     <p class="site-tagline" id="tagline"></p>
+    <script>(function(){var cl=document.getElementById('utc-clock');function u(){var n=new Date();cl.textContent=String(n.getUTCHours()).padStart(2,'0')+':'+String(n.getUTCMinutes()).padStart(2,'0')+':'+String(n.getUTCSeconds()).padStart(2,'0')+' UTC';}u();setInterval(u,1000);})();</script>
     <script>
     (function(){
       var taglines = [
@@ -851,8 +852,6 @@ export function createApi(): Hono {
         } else if(d.phase === 'OPEN' && phase){
           // Server says OPEN (new raffle) but we're in a phase — let RESET_ finish
         }
-        if(d.pool) poolEl.textContent = '$' + parseFloat(d.pool).toFixed(2);
-        if(d.participants) partEl.textContent = d.participants;
         if(d.winners && d.winners.length) winners = d.winners;
         if(d.vault && d.vault !== vault){
           if(!vault){
@@ -862,6 +861,7 @@ export function createApi(): Hono {
           }
           if(phase && phase !== 'RESET_'){
             // In post-raffle timeline — queue the new vault, don't switch yet
+            // Don't update pool/participants — keep showing old raffle's data
             pendingVault = d.vault;
           } else {
             // Not in a phase or already at RESET — switch immediately
@@ -879,6 +879,10 @@ export function createApi(): Hono {
             document.body.style.transition = 'background-color 2s ease';
             document.body.style.backgroundColor = '#908888';
           }
+        } else {
+          // Same vault — update pool/participants normally
+          if(d.pool) poolEl.textContent = '$' + parseFloat(d.pool).toFixed(2);
+          if(d.participants) partEl.textContent = d.participants;
         }
       });
 
