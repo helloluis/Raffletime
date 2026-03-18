@@ -875,7 +875,7 @@ export function createApi(): Hono {
             resultLine.style.display = 'none';
             poolEl.textContent = d.pool ? '$' + parseFloat(d.pool).toFixed(2) : '$0.00';
             partEl.textContent = d.participants || '0';
-            if(partLink) partLink.href = '/raffles/'+vault;
+            if(partLink){ partLink.href = '/raffles/'+vault; partLink.style.display = ''; }
             document.body.style.transition = 'background-color 2s ease';
             document.body.style.backgroundColor = '#908888';
           }
@@ -921,22 +921,17 @@ export function createApi(): Hono {
         var titleReset = document.querySelector('.site-title span');
         if(titleReset) titleReset.style.color = '';
         document.body.style.transition = 'background-color 3s ease';
-        if(p === 'DRAWING_' || p === 'INVALID_'){
-          document.body.style.backgroundColor = '#CCBBBB'; // fade from red to light gray
-        } else if(p === 'RESULT_' || p === 'DISTRIB_' || p === 'REFUND_'){
-          document.body.style.backgroundColor = '#CCBBBB';
-        } else if(p === 'RESET_'){
-          document.body.style.backgroundColor = '#CCBBBB';
-        }
+        document.body.style.backgroundColor = '#CCBBBB';
 
+        // Hide pool line and participants during all post-raffle phases
         var poolLine = document.getElementById('pool-line');
+        if(poolLine) poolLine.style.display = 'none';
+        if(partLink) partLink.style.display = 'none';
 
         if(p === 'DRAWING_'){
           resultLine.style.display = 'none';
-          if(poolLine) poolLine.style.display = 'none';
           typeIv = typewrite('DRAWING', timerEl);
         } else if(p === 'RESULT_'){
-          if(poolLine) poolLine.style.display = 'none';
           typeIv = typewrite('RESULT', timerEl);
           if(winners.length > 0){
             var w = winners[0];
@@ -946,22 +941,17 @@ export function createApi(): Hono {
             resultLine.style.display = '';
           }
         } else if(p === 'DISTRIB_'){
-          if(poolLine) poolLine.style.display = 'none';
           typeIv = typewrite('DISTRIB', timerEl);
+          // Keep winner line visible from RESULT
         } else if(p === 'INVALID_'){
           resultLine.style.display = 'none';
-          if(poolLine) poolLine.style.display = 'none';
           typeIv = typewrite('INVALID', timerEl);
         } else if(p === 'REFUND_'){
-          if(poolLine) poolLine.style.display = 'none';
           resultLine.innerHTML = 'Not enough participants. Refunds available.';
           resultLine.style.display = '';
           typeIv = typewrite('REFUND', timerEl);
         } else if(p === 'RESET_'){
           resultLine.style.display = 'none';
-          if(poolLine) poolLine.style.display = 'none';
-          poolEl.textContent = '$0.00';
-          partEl.textContent = '0';
           typeIv = typewrite('RESET', timerEl);
           // After 15s at RESET_, switch to pending vault
           setTimeout(function(){
@@ -974,7 +964,7 @@ export function createApi(): Hono {
             winners = [];
             joinArea.innerHTML = '<button class="cta" id="join-btn" onclick="openJoinModal()">Join ${ticketPrice}</button>';
             joinArea.style.display = '';
-            if(partLink) partLink.href = '/raffles/'+vault;
+            if(partLink){ partLink.href = '/raffles/'+vault; partLink.style.display = ''; }
             var pl2 = document.getElementById('pool-line');
             if(pl2) pl2.style.display = '';
             document.body.style.transition = 'background-color 2s ease';
@@ -1075,6 +1065,10 @@ export function createApi(): Hono {
           winnerHtml = '<em>Invalid</em>';
           rowOpacity = ' style="opacity:0.35"';
         }
+
+        // Skip if this vault is already in the table (server-rendered)
+        var existing = table.querySelector('a[href="/raffles/'+d.vault+'"]');
+        if(existing) return;
 
         var tr = document.createElement('tr');
         tr.className = 'row-flash';

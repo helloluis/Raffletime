@@ -10,7 +10,7 @@ import {
 } from "./abis.js";
 import { config } from "./config.js";
 import * as db from "./db.js";
-import { setServerPhase } from "./scheduler.js";
+import { setServerPhase, getServerPhase } from "./scheduler.js";
 
 /** Resolve an address to an agent name via on-chain AgentRegistry + cache in DB.
  *  Refreshes on-chain data if DB entry is older than 4 hours. */
@@ -529,8 +529,12 @@ export async function advanceRaffle(vault: Address): Promise<RaffleState> {
   );
 
   switch (info.state) {
-    case RaffleState.OPEN:
-      setServerPhase("OPEN");
+    case RaffleState.OPEN: {
+      // Only set OPEN if we're not in a post-raffle display phase (RESULT/DISTRIB/RESET)
+      const currentPhase = getServerPhase().phase;
+      if (currentPhase !== "RESULT" && currentPhase !== "DISTRIB" && currentPhase !== "RESET") {
+        setServerPhase("OPEN");
+      }
       if (now >= info.closesAt) {
         await new Promise((r) => setTimeout(r, 5000)); // let block.timestamp catch up
         await closeRaffle(vault);
@@ -538,6 +542,7 @@ export async function advanceRaffle(vault: Address): Promise<RaffleState> {
         return RaffleState.CLOSED;
       }
       break;
+    }
 
     case RaffleState.CLOSED: {
       const minParticipants = Number(config.raffle.minUniqueParticipants);
