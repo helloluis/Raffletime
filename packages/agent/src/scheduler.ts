@@ -1,5 +1,6 @@
 import { type Address } from "viem";
 import { config } from "./config.js";
+import { broadcast } from "./ws-hub.js";
 import {
   advanceRaffle,
   closeRaffle,
@@ -36,6 +37,8 @@ export function setServerPhase(phase: ServerPhase, winner?: typeof lastWinner) {
     phaseChangedAt = Date.now();
     if (winner) lastWinner = winner;
     console.log(`[scheduler] Phase → ${phase}`);
+    // Push phase change to all WebSocket clients
+    broadcast({ type: "phase", phase, winner: lastWinner });
   }
 }
 
@@ -227,6 +230,20 @@ export async function runSchedulerTick(
 
     setServerPhase("OPEN");
     console.log("[scheduler] House raffle active:", currentVault);
+
+    // Broadcast new raffle to WebSocket clients
+    try {
+      const info = await getRaffleInfo(currentVault);
+      const { formatUsd6 } = await import("./html.js");
+      broadcast({
+        type: "new_raffle",
+        vault: currentVault,
+        name: raffleName,
+        closesAt: Number(info.closesAt) * 1000,
+        ticketPrice: formatUsd6(config.raffle.ticketPriceUsd6),
+        raffleType: "house",
+      });
+    } catch {}
   } catch (error) {
     // withRetry already logged and alerted — nothing more to do this tick
   } finally {

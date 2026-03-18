@@ -821,81 +821,20 @@ export function createApi(): Hono {
       var joinArea = document.getElementById('join-area');
       var resultLine = document.getElementById('result-line');
       var closesAt = ${initialClosesAt};
-      var state = '${initialState}';
       var vault = '${initialVault}';
       window._currentVault = vault;
-      var phase = null;
-      var phaseStart = 0;
+      var phase = 'OPEN';
 
-      var _initPhase = '${initialPhase}'; // applied after setPhase is defined
-      var winners = [];
-      var pendingVault = null;
-
-      // SSE: live updates from server
-      // SSE with auto-reconnect
-      var es;
-      function connectSSE(){
-        es = new EventSource('/api/raffles/live');
-        es.onerror = function(){ setTimeout(connectSSE, 3000); };
-        attachSSEListeners();
-      }
-      function attachSSEListeners(){
-      es.addEventListener('raffle', function(e){
-        var d = JSON.parse(e.data);
-        state = d.state;
-        if(d.closesAt) closesAt = d.closesAt;
-
-        // Server-driven phase — always trust the server
-        if(d.phase && d.phase !== 'OPEN'){
-          var p = d.phase + '_';
-          if(d.phaseWinner) winners = [d.phaseWinner.address];
-          setPhase(p);
-        } else if(d.phase === 'OPEN' && phase){
-          // Server says OPEN (new raffle) but we're in a phase — let RESET_ finish
-        }
-        if(d.winners && d.winners.length) winners = d.winners;
-        if(d.vault && d.vault !== vault){
-          if(!vault){
-            // Page loaded with no active raffle — reload to get full server render
-            window.location.reload();
-            return;
-          }
-          if(phase && phase !== 'RESET_'){
-            // In post-raffle timeline — queue the new vault, don't switch yet
-            // Don't update pool/participants — keep showing old raffle's data
-            pendingVault = d.vault;
-          } else {
-            // Not in a phase or already at RESET — switch immediately
-            vault = d.vault;
-            window._currentVault = vault;
-            phase = null;
-            pendingVault = null;
-            joinArea.innerHTML = '<button class="cta" id="join-btn" onclick="openJoinModal()">Join ${ticketPrice}</button>';
-            joinArea.style.display = '';
-            var pl1 = document.getElementById('pool-line');
-            if(pl1) pl1.style.display = '';
-            resultLine.style.display = 'none';
-            poolEl.textContent = d.pool ? '$' + parseFloat(d.pool).toFixed(2) : '$0.00';
-            partEl.textContent = d.participants || '0';
-            if(partLink){ partLink.href = '/raffles/'+vault; partLink.style.display = ''; }
-            document.body.style.transition = 'background-color 2s ease';
-            document.body.style.backgroundColor = '#908888';
-          }
-        } else {
-          // Same vault — update pool/participants normally
-          if(d.pool) poolEl.textContent = '$' + parseFloat(d.pool).toFixed(2);
-          if(d.participants) partEl.textContent = d.participants;
-        }
-      });
-
-      // Typewriter animation for phase labels — with generation guard
+      // ============ Typewriter ============
       var typeGeneration = 0;
+      var typeIv = null;
       function typewrite(text, el){
         var gen = ++typeGeneration;
         var i = 0;
         el.textContent = '';
-        var iv = setInterval(function(){
-          if(gen !== typeGeneration){ clearInterval(iv); return; } // stale, self-terminate
+        if(typeIv) clearInterval(typeIv);
+        typeIv = setInterval(function(){
+          if(gen !== typeGeneration){ clearInterval(typeIv); return; }
           if(i <= text.length){
             el.textContent = text.slice(0, i) + (i < text.length ? '_' : '');
             i++;
@@ -903,20 +842,59 @@ export function createApi(): Hono {
             setTimeout(function(){ if(gen === typeGeneration) i = 0; }, 800);
           }
         }, 100);
-        return iv;
       }
 
-      var typeIv = null;
+      // ============ Countdown (runs on rAF, only when phase=OPEN) ============
+      function countdownTick(){
+        if(phase !== 'OPEN'){ requestAnimationFrame(countdownTick); return; }
+        var now = Date.now();
+        var d = closesAt - now;
+        if(d < 0) d = 0;
+        var m = Math.floor(d/60000);
+        var s = Math.floor((d%60000)/1000);
+        var ms = Math.floor(d%1000);
+        timerEl.innerHTML = (m<10?'0':'')+m+':'+(s<10?'0':'')+s+'<span class="ms">'+(ms<100?'0':'')+(ms<10?'0':'')+ms+'</span>';
 
-      function setPhase(p){
-        if(phase === p) return;
+        var titleSpan = document.querySelector('.site-title span');
+        var joinBtn = document.getElementById('join-btn');
+        if(d < 60000 && d > 0){
+          timerEl.style.color = '#fff';
+          var msEl = timerEl.querySelector('.ms');
+          if(msEl) msEl.style.color = '#fff';
+          document.body.style.transition = 'background-color 1s ease';
+          document.body.style.backgroundColor = '#8b1a11';
+          if(joinBtn) joinBtn.classList.add('cta-urgent');
+          if(titleSpan) titleSpan.style.color = '#fff';
+        } else if(d > 60000) {
+          timerEl.style.color = '';
+          var msEl2 = timerEl.querySelector('.ms');
+          if(msEl2) msEl2.style.color = '';
+          if(joinBtn) joinBtn.classList.remove('cta-urgent');
+          if(titleSpan) titleSpan.style.color = '';
+        }
+        requestAnimationFrame(countdownTick);
+      }
+      countdownTick();
+
+      // ============ Show OPEN state (countdown + join) ============
+      function showOpen(){
+        phase = 'OPEN';
+        if(typeIv){ clearInterval(typeIv); typeIv = null; }
+        typeGeneration++;
+        joinArea.style.display = '';
+        var poolLine = document.getElementById('pool-line');
+        if(poolLine) poolLine.style.display = '';
+        if(partLink) partLink.style.display = '';
+        resultLine.style.display = 'none';
+        timerEl.style.color = '';
+        document.body.style.transition = 'background-color 2s ease';
+        document.body.style.backgroundColor = '#908888';
+      }
+
+      // ============ Show a phase label (DRAWING/RESULT/DISTRIB/etc) ============
+      function showPhase(p, winner){
         phase = p;
-        phaseStart = Date.now();
-        if(typeIv) clearInterval(typeIv);
-
         joinArea.style.display = 'none';
-
-        // Background color transitions + reset title
         timerEl.style.color = '#000';
         var msReset = timerEl.querySelector('.ms');
         if(msReset) msReset.style.color = '';
@@ -925,178 +903,109 @@ export function createApi(): Hono {
         document.body.style.transition = 'background-color 3s ease';
         document.body.style.backgroundColor = '#CCBBBB';
 
-        // Hide pool line and participants during all post-raffle phases
+        // Hide stats during non-OPEN phases
         var poolLine = document.getElementById('pool-line');
         if(poolLine) poolLine.style.display = 'none';
         if(partLink) partLink.style.display = 'none';
 
-        if(p === 'DRAWING_'){
-          resultLine.style.display = 'none';
-          typeIv = typewrite('DRAWING', timerEl);
-        } else if(p === 'RESULT_'){
-          typeIv = typewrite('RESULT', timerEl);
-          if(winners.length > 0){
-            var w = winners[0];
-            var short = w.slice(0,6)+'...'+w.slice(-4);
-            var prize = poolEl.textContent || '$0.00';
-            resultLine.innerHTML = '<strong>WIN: '+short+' '+prize+'</strong>';
+        // Show/hide winner line
+        if(p === 'RESULT' || p === 'DISTRIB'){
+          if(winner){
+            var short = winner.address.slice(0,6)+'...'+winner.address.slice(-4);
+            resultLine.innerHTML = '<strong>WIN: '+short+' $'+winner.prize+'</strong>';
             resultLine.style.display = '';
           }
-        } else if(p === 'DISTRIB_'){
-          typeIv = typewrite('DISTRIB', timerEl);
-          // Keep winner line visible from RESULT
-        } else if(p === 'INVALID_'){
-          resultLine.style.display = 'none';
-          typeIv = typewrite('INVALID', timerEl);
-        } else if(p === 'REFUND_'){
+        } else if(p === 'REFUND'){
           resultLine.innerHTML = 'Not enough participants. Refunds available.';
           resultLine.style.display = '';
-          typeIv = typewrite('REFUND', timerEl);
-        } else if(p === 'RESET_'){
+        } else {
           resultLine.style.display = 'none';
-          typeIv = typewrite('RESET', timerEl);
-          // After 5s at RESET_, switch to pending vault
-          setTimeout(function(){
-            if(pendingVault){
-              vault = pendingVault;
-              window._currentVault = vault;
-              pendingVault = null;
-            }
-            phase = null;
-            state = 'OPEN'; // Prevent tick from re-entering RESULT_ on stale state
-            winners = [];
-            joinArea.innerHTML = '<button class="cta" id="join-btn" onclick="openJoinModal()">Join ${ticketPrice}</button>';
-            joinArea.style.display = '';
-            if(partLink){ partLink.href = '/raffles/'+vault; partLink.style.display = ''; }
-            var pl2 = document.getElementById('pool-line');
-            if(pl2) pl2.style.display = '';
-            document.body.style.transition = 'background-color 2s ease';
-            document.body.style.backgroundColor = '#908888';
-            if(typeIv) clearInterval(typeIv);
-            timerEl.style.color = '';
-          }, 5000);
         }
+
+        typewrite(p, timerEl);
       }
 
-      // Main render loop
-      // Post-raffle timelines (all times from closesAt):
-      //
-      // SUCCESS path:
-      //   00:00-00:30  DRAWING_
-      //   00:30-01:00  RESULT_   (shows WIN: 0x... $X)
-      //   01:00-01:45  DISTRIB_  (keeps WIN line)
-      //   01:45-02:00  RESET_
-      //
-      // INVALID path (not enough participants):
-      //   00:01-00:10  INVALID_
-      //   00:11-01:30  REFUND_
-      //   01:31-02:00  RESET_
-
-      function tick(){
-        var now = Date.now();
-
-        var joinBtn = document.getElementById('join-btn');
-
-        if(!phase){
-          if(state === 'OPEN'){
-            // Normal countdown
-            var d = closesAt - now;
-            if(d < 0) d = 0;
-            var m = Math.floor(d/60000);
-            var s = Math.floor((d%60000)/1000);
-            var ms = Math.floor(d%1000);
-            timerEl.innerHTML = (m<10?'0':'')+m+':'+(s<10?'0':'')+s+'<span class="ms">'+(ms<100?'0':'')+(ms<10?'0':'')+ms+'</span>';
-
-            // Final minute: snap background to red in 1s, white timer + ms, flash JOIN button
-            var titleSpan = document.querySelector('.site-title span');
-            if(d < 60000 && d > 0){
-              timerEl.style.color = '#fff';
-              // Make ms white too
-              var msEl = timerEl.querySelector('.ms');
-              if(msEl) msEl.style.color = '#fff';
-              document.body.style.transition = 'background-color 1s ease';
-              document.body.style.backgroundColor = '#8b1a11';
-              if(joinBtn) joinBtn.classList.add('cta-urgent');
-              // Make "RAFFLE" in title white so it's readable on red
-              if(titleSpan) titleSpan.style.color = '#fff';
-            } else {
-              timerEl.style.color = '';
-              var msEl2 = timerEl.querySelector('.ms');
-              if(msEl2) msEl2.style.color = '';
-              if(joinBtn) joinBtn.classList.remove('cta-urgent');
-              if(titleSpan) titleSpan.style.color = '';
-            }
-
-            if(d <= 0) setPhase('DRAWING_');
-          } else if(state === 'CLOSED' || state === 'DRAWING'){
-            setPhase('DRAWING_');
-          } else if(state === 'INVALID'){
-            setPhase('INVALID_');
-          } else if(state === 'PAYOUT'){
-            setPhase('RESULT_');
-          } else if(state === 'SETTLED'){
-            setPhase('RESULT_');
-          }
-        }
-
-        // Phase transitions are now server-driven via SSE.
-        // Only client-side fallback: if countdown hits zero and server hasn't sent DRAWING yet
-        if(!phase && state === 'OPEN'){
-          var d2 = closesAt - now;
-          if(d2 <= 0) setPhase('DRAWING_');
-        }
-
-        requestAnimationFrame(tick);
-      }
-      // Apply initial phase if page loaded mid-draw
-      if(_initPhase !== 'OPEN') setPhase(_initPhase + '_');
-      tick();
-
-      // Listen for settled raffles and prepend to history table
-      es.addEventListener('settled', function(e){
-        var d = JSON.parse(e.data);
+      // ============ Add settled raffle to history table ============
+      function addToHistory(d){
         var table = document.querySelector('.prev-table');
         if(!table) return;
-
-        var shortVault = d.vault.slice(0,6)+'...'+d.vault.slice(-4);
-        var winnerHtml = '—';
-        var rowOpacity = '';
-        if(d.state === 'SETTLED' && d.winners && d.winners.length > 0){
-          var w = d.winners[0];
-          winnerHtml = '<a href="https://sepolia.celoscan.io/address/'+w+'" target="_blank">'+w.slice(0,6)+'...'+w.slice(-4)+'</a>';
-        } else if(d.state === 'INVALID'){
-          winnerHtml = '<em>Invalid</em>';
-          rowOpacity = ' style="opacity:0.35"';
-        }
-
-        // Skip if this vault is already in the table (server-rendered)
         var existing = table.querySelector('a[href="/raffles/'+d.vault+'"]');
         if(existing) return;
-
+        var shortVault = d.vault.slice(0,6)+'...'+d.vault.slice(-4);
+        var winnerHtml = '—';
+        if(d.state === 'SETTLED' && d.winner){
+          var w = d.winner;
+          winnerHtml = '<a href="https://sepolia.basescan.org/address/'+w+'" target="_blank">'+w.slice(0,6)+'...'+w.slice(-4)+'</a>';
+        } else if(d.state === 'INVALID'){
+          winnerHtml = '<em>Invalid</em>';
+        }
         var tr = document.createElement('tr');
         tr.className = 'row-flash';
         if(d.state === 'INVALID') tr.style.opacity = '0.35';
         var hIcon = '<svg width="12" height="12" viewBox="0 0 12 12" fill="none" xmlns="http://www.w3.org/2000/svg" style="vertical-align:-1px;margin-right:3px"><path d="M6 1L1 5.5V11H4.5V7.5H7.5V11H11V5.5L6 1Z" fill="currentColor"/></svg>';
-        var nameText = hIcon + (d.name || 'House Raffle');
-        tr.innerHTML = '<td><a href="/raffles/'+d.vault+'">'+nameText+'</a></td>'
-          + '<td><a href="https://sepolia.celoscan.io/address/'+d.vault+'" target="_blank">'+shortVault+'</a></td>'
+        tr.innerHTML = '<td><a href="/raffles/'+d.vault+'">'+hIcon+(d.name||'House Raffle')+'</a></td>'
+          + '<td><a href="https://sepolia.basescan.org/address/'+d.vault+'" target="_blank">'+shortVault+'</a></td>'
           + '<td>'+d.ended+'</td>'
-          + '<td>'+d.pool+'</td>'
+          + '<td>$'+parseFloat(d.pool).toFixed(2)+'</td>'
           + '<td>'+d.participants+'</td>'
           + '<td>'+winnerHtml+'</td>';
-
-        // Insert after the header row
         var headerRow = table.querySelector('tr');
         if(headerRow && headerRow.parentNode){
-          if(headerRow.nextSibling){
-            headerRow.parentNode.insertBefore(tr, headerRow.nextSibling);
-          } else {
-            headerRow.parentNode.appendChild(tr);
-          }
+          if(headerRow.nextSibling) headerRow.parentNode.insertBefore(tr, headerRow.nextSibling);
+          else headerRow.parentNode.appendChild(tr);
         }
-      });
-      } // end attachSSEListeners
-      connectSSE();
+      }
+
+      // ============ WebSocket — dumb renderer ============
+      var ws;
+      function connectWS(){
+        var proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+        ws = new WebSocket(proto + '//' + location.host + '/ws');
+        ws.onclose = function(){ setTimeout(connectWS, 3000); };
+        ws.onerror = function(){ ws.close(); };
+        ws.onmessage = function(e){
+          var d = JSON.parse(e.data);
+
+          if(d.type === 'tick'){
+            // Update pool/participants only during OPEN
+            if(phase === 'OPEN'){
+              poolEl.textContent = '$' + parseFloat(d.pool).toFixed(2);
+              partEl.textContent = d.participants;
+            }
+            closesAt = d.closesAt;
+            vault = d.vault;
+            window._currentVault = vault;
+            if(partLink) partLink.href = '/raffles/'+vault;
+          }
+
+          else if(d.type === 'phase'){
+            if(d.phase === 'OPEN'){
+              showOpen();
+            } else {
+              showPhase(d.phase, d.winner);
+            }
+          }
+
+          else if(d.type === 'new_raffle'){
+            vault = d.vault;
+            window._currentVault = vault;
+            closesAt = d.closesAt;
+            joinArea.innerHTML = '<button class="cta" id="join-btn" onclick="openJoinModal()">Join '+d.ticketPrice+'</button>';
+            poolEl.textContent = '$0.00';
+            partEl.textContent = '0';
+            if(partLink) partLink.href = '/raffles/'+vault;
+            // Don't switch to OPEN yet — server will send phase=OPEN when ready
+          }
+
+          else if(d.type === 'settled'){
+            addToHistory(d);
+          }
+        };
+      }
+      connectWS();
+
+      // Apply initial phase if page loaded mid-draw
+      if('${initialPhase}' !== 'OPEN') showPhase('${initialPhase}', null);
     })();
     </script>
 

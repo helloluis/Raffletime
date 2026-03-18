@@ -11,6 +11,8 @@ import {
 import { config } from "./config.js";
 import * as db from "./db.js";
 import { setServerPhase, getServerPhase } from "./scheduler.js";
+import { broadcast } from "./ws-hub.js";
+import { formatUsd6 } from "./html.js";
 
 /** Resolve an address to an agent name via on-chain AgentRegistry + cache in DB.
  *  Refreshes on-chain data if DB entry is older than 4 hours. */
@@ -529,9 +531,24 @@ export async function advanceRaffle(vault: Address): Promise<RaffleState> {
     }
   } catch {}
 
+  const pool = (Number(info.totalPool) / 1e6).toFixed(2);
+  const participants = info.participantCount.toString();
+  const closesAtMs = Number(info.closesAt) * 1000;
   console.log(
-    `[lifecycle] ${vault.slice(0, 10)}... state=${stateNames[info.state]} pool=${(Number(info.totalPool) / 1e6).toFixed(2)} participants=${info.participantCount}`
+    `[lifecycle] ${vault.slice(0, 10)}... state=${stateNames[info.state]} pool=${pool} participants=${participants}`
   );
+
+  // Broadcast tick to all WebSocket clients
+  const meta = (await import("./raffle-store.js")).getRaffleMeta(vault);
+  broadcast({
+    type: "tick",
+    vault,
+    pool,
+    participants,
+    closesAt: closesAtMs,
+    name: meta?.name || "House Raffle",
+    ticketPrice: formatUsd6(config.raffle.ticketPriceUsd6),
+  });
 
   switch (info.state) {
     case RaffleState.OPEN: {
@@ -598,6 +615,23 @@ export async function advanceRaffle(vault: Address): Promise<RaffleState> {
           setTimeout(() => setServerPhase("RESET"), 25000);
         }
         await db.upsertRaffle({ vault, state: "SETTLED", settledAt: new Date() });
+
+        // Broadcast settled event for history table
+        const meta = (await import("./raffle-store.js")).getRaffleMeta(vault);
+        const dt = new Date();
+        const ended = `${String(dt.getMonth()+1).padStart(2,'0')}/${String(dt.getDate()).padStart(2,'0')} ${String(dt.getHours()).padStart(2,'0')}:${String(dt.getMinutes()).padStart(2,'0')}`;
+        broadcast({
+          type: "settled",
+          vault,
+          name: meta?.name || "House Raffle",
+          pool: pool,
+          participants: participants,
+          winner: winners.length > 0 ? winners[0] : null,
+          winnerName: winners.length > 0 ? (await resolveAgentName(winners[0] as Address)) : null,
+          prize: pool,
+          state: "SETTLED",
+          ended,
+        });
       } catch (e) {
         console.log("[lifecycle] DB sync error:", String(e).slice(0, 100));
       }

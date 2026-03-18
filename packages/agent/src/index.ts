@@ -5,6 +5,7 @@ import { createApi } from "./api.js";
 import { startScheduler } from "./scheduler.js";
 import { ensureAgentRegistered } from "./raffle-lifecycle.js";
 import { config } from "./config.js";
+import { initWebSocketServer } from "./ws-hub.js";
 
 async function main() {
   console.log("=== RaffleTime House Agent ===");
@@ -47,9 +48,9 @@ async function main() {
     }
   }
 
-  // Start HTTP server
+  // Start HTTP + WebSocket server
   const app = createApi();
-  serve({ fetch: app.fetch, port: config.port }, (info) => {
+  const server = serve({ fetch: app.fetch, port: config.port }, (info) => {
     console.log(`\n[api] Server listening on http://localhost:${info.port}`);
     console.log(
       `[api] Agent manifest: http://localhost:${info.port}/.well-known/agent.json`
@@ -58,6 +59,7 @@ async function main() {
       `[api] Health check: http://localhost:${info.port}/api/health`
     );
   });
+  initWebSocketServer(server as any);
 }
 
 main().catch(console.error);
