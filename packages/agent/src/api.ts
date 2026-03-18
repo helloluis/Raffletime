@@ -849,7 +849,8 @@ export function createApi(): Hono {
         if(phase !== 'OPEN'){ requestAnimationFrame(countdownTick); return; }
         var now = Date.now();
         var d = closesAt - now;
-        if(d < 0) d = 0;
+        // Instant DRAWING when countdown hits zero (don't wait for server)
+        if(d <= 0){ showPhase('DRAWING', null); requestAnimationFrame(countdownTick); return; }
         var m = Math.floor(d/60000);
         var s = Math.floor((d%60000)/1000);
         var ms = Math.floor(d%1000);
