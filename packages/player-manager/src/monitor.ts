@@ -90,22 +90,20 @@ export async function checkBalances(): Promise<string[]> {
     const lastAlert = lastAlerted.get(player.address) ?? 0;
     const onCooldown = now - lastAlert < ALERT_COOLDOWN_MS;
 
-    const short = `${addr.slice(0, 6)}...${addr.slice(-4)}`;
-
     // Low token balance
     if (tokenBal < lowThreshold && player.registered && !onCooldown) {
-      alerts.push(`⚠️ *Low balance*: **${player.name}** (${short}) has $${formatUsd6(tokenBal)}`);
+      alerts.push(`⚠️ *Low balance*: **${player.name}** ${addr} has $${formatUsd6(tokenBal)}`);
       lastAlerted.set(player.address, now);
     }
 
     // High token balance (won big) — no cooldown, always useful to know
     if (tokenBal > highThreshold) {
-      alerts.push(`💰 *High balance*: **${player.name}** (${short}) has $${formatUsd6(tokenBal)} — consider sweeping`);
+      alerts.push(`💰 *High balance*: **${player.name}** ${addr} has $${formatUsd6(tokenBal)} — consider sweeping`);
     }
 
     // Zero ETH (can't transact)
     if (ethBal === 0n && player.registered && !onCooldown) {
-      alerts.push(`🚨 *No gas*: **${player.name}** (${short}) has 0 ETH`);
+      alerts.push(`🚨 *No gas*: **${player.name}** ${addr} has 0 ETH`);
       lastAlerted.set(player.address, now);
     }
   }
@@ -122,7 +120,7 @@ export async function checkBalances(): Promise<string[]> {
       const houseOnCooldown = Date.now() - lastHouseAlert < ALERT_COOLDOWN_MS;
 
       if (houseBal < BigInt(2_000_000) && !houseOnCooldown) { // < $2
-        alerts.push(`🏠 *House agent low*: (${houseShort}) has $${formatUsd6(houseBal)} — needs USDC for raffle deposits`);
+        alerts.push(`🏠 *House agent low*: ${houseAddr} has $${formatUsd6(houseBal)} — needs USDC for raffle deposits`);
         lastAlerted.set(houseKey, Date.now());
       }
     } catch {}
