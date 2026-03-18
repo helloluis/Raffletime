@@ -85,11 +85,6 @@ async function syncParticipants(vault: Address, participantCount: bigint): Promi
   for (const e of existingEntries) {
     existingByAddr.set(e.agent, e.tickets || 1);
   }
-  const count = Number(participantCount);
-
-  // If DB total tickets matches on-chain count, skip
-  const dbTotal = Array.from(existingByAddr.values()).reduce((a, b) => a + b, 0);
-  if (dbTotal >= count && count > 0) return;
 
   const GetParticipantsAbi = [
     { name: "getParticipants", type: "function", stateMutability: "view", inputs: [], outputs: [{ name: "", type: "address[]" }] },
