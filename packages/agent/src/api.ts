@@ -1099,6 +1099,8 @@ export function createApi(): Hono {
         if(totEl) totEl.textContent = '$' + PRICE_NUM.toFixed(2);
         currentStep = 'connect';
         setButtonText('Connect Wallet');
+        // Restore onclick in case it was overridden by "You're In!" handler
+        document.getElementById('modal-action').onclick = function(){ runJoinFlow(); };
 
         document.getElementById('joinModal').classList.add('active');
 
