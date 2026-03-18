@@ -955,7 +955,7 @@ export function createApi(): Hono {
         } else if(p === 'RESET_'){
           resultLine.style.display = 'none';
           typeIv = typewrite('RESET', timerEl);
-          // After 15s at RESET_, switch to pending vault
+          // After 5s at RESET_, switch to pending vault
           setTimeout(function(){
             if(pendingVault){
               vault = pendingVault;
@@ -974,7 +974,7 @@ export function createApi(): Hono {
             document.body.style.backgroundColor = '#908888';
             if(typeIv) clearInterval(typeIv);
             timerEl.style.color = '';
-          }, 15000);
+          }, 5000);
         }
       }
 

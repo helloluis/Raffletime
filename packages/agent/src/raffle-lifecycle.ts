@@ -594,8 +594,8 @@ export async function advanceRaffle(vault: Address): Promise<RaffleState> {
           setServerPhase("RESULT", { address: winners[0], name: winnerName, prize: (Number(info.totalPool) / 1e6).toFixed(2) });
 
           // Auto-advance: RESULT → DISTRIB → RESET
-          setTimeout(() => setServerPhase("DISTRIB"), 30000);
-          setTimeout(() => setServerPhase("RESET"), 45000);
+          setTimeout(() => setServerPhase("DISTRIB"), 15000);
+          setTimeout(() => setServerPhase("RESET"), 25000);
         }
         await db.upsertRaffle({ vault, state: "SETTLED", settledAt: new Date() });
       } catch (e) {
