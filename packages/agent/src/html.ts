@@ -57,6 +57,7 @@ export function layout(title: string, body: string): string {
       font-size: 0.9rem;
       color: #ccc;
       margin-bottom: 3rem;
+      min-height: 1.4em;
     }
 
     h2 {
