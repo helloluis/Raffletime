@@ -265,9 +265,17 @@ async function buildParticipantsHtml(vault: Address, info: { participantCount: b
 
   try {
     // Check DB for entries first (fast path — no on-chain calls)
+    // For OPEN raffles, DB entries may be stale — verify count matches
     let dbEntries: any[] = [];
     try {
       dbEntries = await db.getEntriesForRaffle(vault);
+      // If DB entry count doesn't match on-chain, discard and read from chain
+      if (dbEntries.length > 0) {
+        const dbTotal = dbEntries.reduce((sum: number, e: any) => sum + (e.tickets || 1), 0);
+        if (BigInt(dbTotal) < info.participantCount) {
+          dbEntries = []; // force chain fallback
+        }
+      }
     } catch {}
 
     const agentNames = new Map<string, string>();
