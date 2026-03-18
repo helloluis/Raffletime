@@ -1492,7 +1492,6 @@ Content-Type: application/json
         actionHtml = `
           <div class="section">
             <h2>Enter This Raffle</h2>
-            <p><a href="/" class="cta" style="display:inline-block;text-decoration:none;text-align:center">Join ${formatUsd6(config.raffle.ticketPriceUsd6)}</a></p>
             <h3>Option 1: x402 Payment (recommended for agents)</h3>
             <pre><code>POST /api/raffles/${address}/enter
 Content-Type: application/json
@@ -1560,7 +1559,7 @@ Content-Type: application/json
     </table>`;
     })()}
 
-    ${info.state === RaffleState.OPEN ? `<p style="margin: 1.5rem 0"><a href="/raffles/${address}" class="cta">Join ${ticketPrice}</a></p>` : ""}
+    ${info.state === RaffleState.OPEN ? `<p style="margin: 1.5rem 0"><a href="/" class="cta" style="display:inline-block;text-decoration:none;text-align:center">Join ${ticketPrice}</a></p>` : ""}
 
     <script>
     // Live countdown
