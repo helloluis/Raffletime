@@ -823,6 +823,7 @@ export function createApi(): Hono {
       var closesAt = ${initialClosesAt};
       var state = '${initialState}';
       var vault = '${initialVault}';
+      window._currentVault = vault;
       var phase = null;
       var phaseStart = 0;
 
@@ -866,6 +867,7 @@ export function createApi(): Hono {
           } else {
             // Not in a phase or already at RESET — switch immediately
             vault = d.vault;
+            window._currentVault = vault;
             phase = null;
             pendingVault = null;
             joinArea.innerHTML = '<button class="cta" id="join-btn" onclick="openJoinModal()">Join ${ticketPrice}</button>';
@@ -957,6 +959,7 @@ export function createApi(): Hono {
           setTimeout(function(){
             if(pendingVault){
               vault = pendingVault;
+              window._currentVault = vault;
               pendingVault = null;
             }
             phase = null;
@@ -1142,7 +1145,19 @@ export function createApi(): Hono {
     (function(){
       var TOKEN = '${config.contracts.paymentToken}';
       var AGENT_REG = '${config.contracts.agentRegistry}';
-      var VAULT = '${initialVault}';
+      function getVault(){ return window._currentVault || '${initialVault}'; }
+
+      // Poll for transaction receipt and return true if success, false if reverted
+      async function waitForReceipt(txHash){
+        for(var i = 0; i < 60; i++){
+          await new Promise(function(r){ setTimeout(r, 2000); });
+          var receipt = await window.ethereum.request({method:'eth_getTransactionReceipt',params:[txHash]});
+          if(receipt){
+            return receipt.status === '0x1';
+          }
+        }
+        throw new Error('Transaction not mined after 2 minutes');
+      }
       var BOND = '0x' + BigInt('${config.bondAmount}').toString(16);
       var TICKET = '0x' + BigInt('${config.raffle.ticketPriceUsd6}').toString(16);
       var CHAIN_ID = '0x' + (${config.chainId}).toString(16);
@@ -1327,11 +1342,20 @@ export function createApi(): Hono {
             setButtonDisabled(false);
 
           } else if(currentStep === 'ticket'){
+            var v = getVault();
+            if(!v){ showError('No active raffle'); setButtonDisabled(false); return; }
+            // Approve total amount in one go (ticketQty * ticketPrice)
+            var totalApproval = '0x' + (BigInt(TICKET) * BigInt(ticketQty)).toString(16);
+            setStatus('ticket','active','approving $'+(ticketQty * PRICE_NUM).toFixed(2)+'...');
+            var approveTx = await window.ethereum.request({method:'eth_sendTransaction',params:[{from:userAddr,to:TOKEN,data:encodeApprove(v,totalApproval)}]});
+            var approveOk = await waitForReceipt(approveTx);
+            if(!approveOk){ throw new Error('Approve transaction failed'); }
+            // Enter each ticket (1 signature per ticket, no extra approve)
             for(var t = 0; t < ticketQty; t++){
-              setStatus('ticket','active','ticket '+(t+1)+'/'+ticketQty+' approving...');
-              await window.ethereum.request({method:'eth_sendTransaction',params:[{from:userAddr,to:TOKEN,data:encodeApprove(VAULT,TICKET)}]});
-              setStatus('ticket','active','ticket '+(t+1)+'/'+ticketQty+' entering...');
-              await window.ethereum.request({method:'eth_sendTransaction',params:[{from:userAddr,to:VAULT,data:encodeEnterRaffle(TOKEN, '0x0000000000000000000000000000000000000000')}]});
+              setStatus('ticket','active','entering ticket '+(t+1)+'/'+ticketQty+'...');
+              var enterTx = await window.ethereum.request({method:'eth_sendTransaction',params:[{from:userAddr,to:v,data:encodeEnterRaffle(TOKEN, '0x0000000000000000000000000000000000000000')}]});
+              var enterOk = await waitForReceipt(enterTx);
+              if(!enterOk){ throw new Error('Ticket '+(t+1)+' failed — raffle may be closed or full'); }
             }
             setStatus('ticket','done', ticketQty + ' ticket' + (ticketQty > 1 ? 's' : '') + ' bought');
             currentStep = 'done';
