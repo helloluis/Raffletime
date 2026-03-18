@@ -264,20 +264,46 @@ export async function startDaemon(): Promise<void> {
   await loop();
   setInterval(loop, POLL_INTERVAL);
 
-  // Balance check + rebalance every 15 minutes
+  // Balance check every 15 minutes
   setInterval(async () => {
     const alerts = await checkBalances();
     for (const a of alerts) {
       console.log(`[monitor] ${a}`);
       await sendAlert(a);
     }
-    // Rebalance tokens from rich players to depleted ones
+  }, 15 * 60 * 1000);
+
+  // Hourly funding + rebalance at minute 5 of every hour
+  // Ensures players have enough USDC before the raffle gets going
+  let lastFundingHour = -1;
+  setInterval(async () => {
+    const now = new Date();
+    const hour = now.getUTCHours();
+    const minute = now.getUTCMinutes();
+
+    // Only run at minute 5, once per hour
+    if (minute !== 5 || hour === lastFundingHour) return;
+    lastFundingHour = hour;
+
+    console.log("[daemon] Hourly funding check...");
     try {
+      // 1. Rebalance between players (rich → poor)
       await rebalancePlayers(config.seedPassword);
     } catch (e) {
-      console.log(`[monitor] Rebalance error: ${String(e).slice(0, 80)}`);
+      console.log(`[daemon] Rebalance error: ${String(e).slice(0, 80)}`);
     }
-  }, 15 * 60 * 1000);
+
+    // 2. Fund from treasury if players are still depleted
+    if (config.treasuryKey) {
+      try {
+        await fundPlayers(config.seedPassword, config.treasuryKey, {
+          tokenAmount: BigInt(1_000_000), // top up to $1 USDC
+        });
+      } catch (e) {
+        console.log(`[daemon] Treasury funding error: ${String(e).slice(0, 80)}`);
+      }
+    }
+  }, 30_000); // check every 30s (only acts at minute 5)
 
   console.log("[daemon] Running. Press Ctrl+C to stop.");
 }
