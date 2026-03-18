@@ -751,7 +751,7 @@ export function createApi(): Hono {
     const ticketPrice = formatUsd6(config.raffle.ticketPriceUsd6);
 
     return c.html(layout("Home", `
-    <h1 class="site-title"><span>Raffle</span>time <span class="testnet-pill">Testnet</span> <span id="utc-clock" style="font-size:0.35em;font-weight:400;font-family:monospace;opacity:0.7;vertical-align:middle"></span></h1>
+    <h1 class="site-title"><span>Raffle</span>time <span class="testnet-pill">Testnet</span> <span id="utc-clock" style="font-size:0.55rem;font-weight:700;font-family:'Space Mono',monospace;opacity:0.7;vertical-align:middle;letter-spacing:0.1em"></span></h1>
     <p class="site-tagline" id="tagline"></p>
     <script>(function(){var cl=document.getElementById('utc-clock');function u(){var n=new Date();cl.textContent=String(n.getUTCHours()).padStart(2,'0')+':'+String(n.getUTCMinutes()).padStart(2,'0')+':'+String(n.getUTCSeconds()).padStart(2,'0')+' UTC';}u();setInterval(u,1000);})();</script>
     <script>
