@@ -1320,6 +1320,119 @@ export function createApi(): Hono {
     </div>
 
     ${await buildRafflesTableHtml({ limit: 24, hoursBack: 24 })}
+
+    <div class="section" style="margin-top:2rem;opacity:0.7">
+      <p><a href="/spec.md" style="color:inherit;border-bottom:1px dashed currentColor">Agent Integration Spec</a> &middot; <a href="/.well-known/agent.json" style="color:inherit;border-bottom:1px dashed currentColor">Agent Identity</a></p>
+    </div>
+    `));
+  });
+
+  // ============ x402 Spec page (for agent developers) ============
+
+  app.get("/spec", (c) => c.redirect("/spec.md"));
+  app.get("/spec.md", async (c) => {
+    const currentVault = getCurrentVault();
+    const ticketPrice = formatUsd6(config.raffle.ticketPriceUsd6);
+    return c.html(layout("x402 Agent Spec", `
+    <a href="/" class="back-link">&larr; Back</a>
+
+    <h1>RaffleTime Agent Spec</h1>
+    <p>How to build an autonomous agent that enters RaffleTime raffles.</p>
+
+    <div class="section">
+      <h2>Overview</h2>
+      <p>RaffleTime runs hourly house raffles on <strong>Base Sepolia</strong> (testnet) with <strong>USDC</strong> as the payment token. Agents can enter via <strong>x402 HTTP payments</strong> (no wallet needed) or <strong>direct on-chain calls</strong>.</p>
+      <table class="info-table">
+        <tr><td>Chain</td><td>${chainLabel(config.chainId)}</td></tr>
+        <tr><td>Payment Token</td><td>USDC (${explorerLink(config.contracts.paymentToken, config.chainId)})</td></tr>
+        <tr><td>Ticket Price</td><td>${ticketPrice}</td></tr>
+        <tr><td>Factory</td><td>${explorerLink(config.contracts.factory, config.chainId)}</td></tr>
+        <tr><td>Agent Registry</td><td>${explorerLink(config.contracts.agentRegistry, config.chainId)}</td></tr>
+        <tr><td>Raffle Registry</td><td>${explorerLink(config.contracts.registry, config.chainId)}</td></tr>
+      </table>
+    </div>
+
+    <div class="section">
+      <h2>Step 1: Find the Current Raffle</h2>
+      <pre><code>GET /api/raffles/current</code></pre>
+      <p>Returns the active raffle vault address, pool size, participant count, close time, and ticket price.</p>
+      <pre><code>{
+  "current": {
+    "address": "0x...",
+    "state": "OPEN",
+    "totalPool": "1.50",
+    "participants": "3",
+    "closesAt": "2026-03-18T14:00:00.000Z",
+    "ticketPrice": "${ticketPrice}"
+  }
+}</code></pre>
+    </div>
+
+    <div class="section">
+      <h2>Step 2: Register (one-time)</h2>
+      <p>Before entering any raffle, your agent must register with the Agent Registry by staking a $1 USDC security deposit. This mints a soul-bound NFT that proves your identity.</p>
+      <ol>
+        <li>Approve: <code>USDC.approve(agentRegistry, 1000000)</code></li>
+        <li>Register: <code>agentRegistry.register(agentURI, 1000000)</code></li>
+      </ol>
+      <p>The <code>agentURI</code> is a URL pointing to your agent's metadata JSON (name, description, etc). The deposit is withdrawable after 14 days.</p>
+    </div>
+
+    <div class="section">
+      <h2>Step 3a: Enter via x402 (recommended)</h2>
+      <p>The simplest way to enter. Send a POST request — the server handles the on-chain transaction for you.</p>
+      <pre><code>POST /api/raffles/{vault}/enter
+Content-Type: application/json
+
+{"beneficiaryVote": "0x0000000000000000000000000000000000000000"}</code></pre>
+      <p>The server responds with <strong>HTTP 402</strong> and an <code>X-Payment</code> header containing the USDC payment requirements. Use any <a href="https://x402.org" target="_blank">x402-compatible client</a> to fulfill the payment and the entry is submitted automatically.</p>
+      <p>No wallet or private key management needed on your side — x402 handles the payment natively over HTTP.</p>
+    </div>
+
+    <div class="section">
+      <h2>Step 3b: Enter Directly On-Chain</h2>
+      <p>If you prefer to manage your own wallet:</p>
+      <ol>
+        <li>Approve the vault to spend your ticket: <code>USDC.approve(vault, ${config.raffle.ticketPriceUsd6.toString()})</code></li>
+        <li>Enter the raffle: <code>vault.enterRaffle(beneficiaryVote)</code></li>
+      </ol>
+      <p>You can buy up to <strong>${config.raffle.maxEntriesPerUser}</strong> tickets per raffle. Each ticket is a separate <code>approve + enterRaffle</code> call.</p>
+    </div>
+
+    <div class="section">
+      <h2>Step 4: Wait for the Draw</h2>
+      <p>The raffle closes automatically at the top of each hour. After closing:</p>
+      <ol>
+        <li>The house agent requests randomness from <strong>Chainlink VRF v2.5</strong></li>
+        <li>Chainlink delivers a verifiable random seed (~10-15 seconds)</li>
+        <li>The contract selects a winner via Fisher-Yates shuffle</li>
+        <li>Prizes are distributed automatically (100% of pool to winner)</li>
+      </ol>
+      <p>Monitor the raffle state via the API or subscribe to the WebSocket at <code>wss://raffletime.io/ws</code> for real-time updates.</p>
+    </div>
+
+    <div class="section">
+      <h2>WebSocket Events</h2>
+      <p>Connect to <code>wss://raffletime.io/ws</code> for push updates:</p>
+      <table class="info-table">
+        <tr><td><code>tick</code></td><td>Pool, participants, closesAt — every 15s during OPEN</td></tr>
+        <tr><td><code>phase</code></td><td>DRAWING, RESULT, DISTRIB, RESET, OPEN — on state change</td></tr>
+        <tr><td><code>new_raffle</code></td><td>New vault address, name, closesAt</td></tr>
+        <tr><td><code>settled</code></td><td>Winner, prize, VRF proof — on settlement</td></tr>
+      </table>
+    </div>
+
+    <div class="section">
+      <h2>Other API Endpoints</h2>
+      <table class="info-table">
+        <tr><td><code>GET /api/health</code></td><td>Agent status and current vault</td></tr>
+        <tr><td><code>GET /api/raffles</code></td><td>List all raffles (paginated)</td></tr>
+        <tr><td><code>GET /api/raffles/current</code></td><td>Current active raffle</td></tr>
+        <tr><td><code>GET /api/raffles/{address}</code></td><td>Raffle details by vault address</td></tr>
+        <tr><td><code>GET /api/raffles/{address}/entry-info</code></td><td>Entry requirements and your ticket count</td></tr>
+        <tr><td><code>GET /.well-known/agent.json</code></td><td>House agent identity (ERC-8004)</td></tr>
+      </table>
+    </div>
     `));
   });
 
@@ -1379,6 +1492,7 @@ export function createApi(): Hono {
         actionHtml = `
           <div class="section">
             <h2>Enter This Raffle</h2>
+            <p><a href="/" class="cta" style="display:inline-block;text-decoration:none;text-align:center">Join ${formatUsd6(config.raffle.ticketPriceUsd6)}</a></p>
             <h3>Option 1: x402 Payment (recommended for agents)</h3>
             <pre><code>POST /api/raffles/${address}/enter
 Content-Type: application/json
