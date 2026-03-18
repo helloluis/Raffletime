@@ -552,9 +552,10 @@ export async function advanceRaffle(vault: Address): Promise<RaffleState> {
 
   switch (info.state) {
     case RaffleState.OPEN: {
-      // Only set OPEN if we're not in a post-raffle display phase (RESULT/DISTRIB/RESET)
+      // Only set OPEN if we're not in a post-raffle display phase
       const currentPhase = getServerPhase().phase;
-      if (currentPhase !== "RESULT" && currentPhase !== "DISTRIB") {
+      const postRafflePhases = ["RESULT", "DISTRIB", "INVALID", "REFUND"];
+      if (!postRafflePhases.includes(currentPhase)) {
         setServerPhase("OPEN");
       }
       if (now >= info.closesAt) {
@@ -651,7 +652,7 @@ export async function advanceRaffle(vault: Address): Promise<RaffleState> {
     case RaffleState.INVALID:
       setServerPhase("INVALID");
       setTimeout(() => setServerPhase("REFUND"), 10000);
-      setTimeout(() => setServerPhase("RESET"), 90000);
+      setTimeout(() => setServerPhase("RESET"), 25000);
       try { await db.upsertRaffle({ vault, state: "INVALID", settledAt: new Date() }); } catch {}
       // Auto-distribute refunds to all participants
       if (info.participantCount > 0n) {
