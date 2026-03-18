@@ -591,6 +591,8 @@ export async function advanceRaffle(vault: Address): Promise<RaffleState> {
       } catch (e) {
         console.log("[lifecycle] DB sync error:", String(e).slice(0, 100));
       }
+      // Reclaim ARO deposit from factory
+      try { await claimDeposit(vault); } catch {}
       return RaffleState.SETTLED;
     }
 
@@ -622,6 +624,8 @@ export async function advanceRaffle(vault: Address): Promise<RaffleState> {
           console.log("[lifecycle] Refunds already distributed or no entries");
         }
       }
+      // Reclaim ARO deposit from factory (50% refunded on invalid)
+      try { await claimDeposit(vault); } catch {}
       break;
   }
 

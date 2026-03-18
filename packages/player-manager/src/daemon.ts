@@ -7,7 +7,7 @@
 import { type Address } from "viem";
 import { loadSeed } from "./wallet.js";
 import { loadRegistry, getActivePlayers, ticketsForProfile } from "./registry.js";
-import { enterRaffle, createPlayers, fundPlayers, registerPlayers } from "./operations.js";
+import { enterRaffle, createPlayers, fundPlayers, registerPlayers, rebalancePlayers } from "./operations.js";
 import { checkBalances } from "./monitor.js";
 import { config } from "./config.js";
 
@@ -264,12 +264,18 @@ export async function startDaemon(): Promise<void> {
   await loop();
   setInterval(loop, POLL_INTERVAL);
 
-  // Balance check every 15 minutes
+  // Balance check + rebalance every 15 minutes
   setInterval(async () => {
     const alerts = await checkBalances();
     for (const a of alerts) {
       console.log(`[monitor] ${a}`);
       await sendAlert(a);
+    }
+    // Rebalance tokens from rich players to depleted ones
+    try {
+      await rebalancePlayers(config.seedPassword);
+    } catch (e) {
+      console.log(`[monitor] Rebalance error: ${String(e).slice(0, 80)}`);
     }
   }, 15 * 60 * 1000);
 
