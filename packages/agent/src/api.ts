@@ -1174,9 +1174,9 @@ export function createApi(): Hono {
         document.getElementById('ticket-total').textContent = '$' + (ticketQty * PRICE_NUM).toFixed(2);
       };
 
-      window.openJoinModal = function(){
-        // Reset all steps
-        setStatus('connect', userAddr ? 'done' : 'pending', userAddr ? 'done' : 'waiting');
+      window.openJoinModal = async function(){
+        // Reset UI
+        setStatus('connect','pending','waiting');
         setStatus('register','pending','waiting');
         setStatus('badge','pending','waiting');
         setStatus('ticket','pending','waiting');
@@ -1187,13 +1187,23 @@ export function createApi(): Hono {
         var totEl = document.getElementById('ticket-total');
         if(qtyEl) qtyEl.textContent = '1';
         if(totEl) totEl.textContent = '$' + PRICE_NUM.toFixed(2);
-        currentStep = userAddr ? 'register' : 'connect';
-        setButtonText(userAddr ? 'Checking...' : 'Connect Wallet');
+        currentStep = 'connect';
+        setButtonText('Connect Wallet');
 
         document.getElementById('joinModal').classList.add('active');
 
-        if(userAddr){
-          checkRegistration();
+        // Auto-detect wallet if already connected
+        if(window.ethereum){
+          try{
+            var accounts = await window.ethereum.request({method:'eth_accounts'});
+            if(accounts && accounts.length > 0){
+              userAddr = accounts[0];
+              setStatus('connect','done','done');
+              document.getElementById('wallet-info').innerHTML = '<span class="wallet-addr">'+userAddr.slice(0,6)+'...'+userAddr.slice(-4)+'</span>';
+              setButtonText('Checking...');
+              await checkRegistration();
+            }
+          } catch(e){}
         }
       };
       window.closeJoinModal = function(){
