@@ -81,34 +81,51 @@ export async function checkBalances(): Promise<string[]> {
     } catch { continue; }
 
     // Check CELO balance
-    let celoBal = 0n;
+    let ethBal = 0n;
     try {
-      celoBal = await publicClient.getBalance({ address: addr });
+      ethBal = await publicClient.getBalance({ address: addr });
     } catch { continue; }
 
     const now = Date.now();
     const lastAlert = lastAlerted.get(player.address) ?? 0;
     const onCooldown = now - lastAlert < ALERT_COOLDOWN_MS;
 
+    const short = `${addr.slice(0, 6)}...${addr.slice(-4)}`;
+
     // Low token balance
     if (tokenBal < lowThreshold && player.registered && !onCooldown) {
-      const msg = `⚠️ *Low balance*: ${player.name} has $${formatUsd6(tokenBal)} tokens`;
-      alerts.push(msg);
+      alerts.push(`⚠️ *Low balance*: **${player.name}** (${short}) has $${formatUsd6(tokenBal)}`);
       lastAlerted.set(player.address, now);
     }
 
     // High token balance (won big) — no cooldown, always useful to know
     if (tokenBal > highThreshold) {
-      const msg = `💰 *High balance*: ${player.name} has $${formatUsd6(tokenBal)} tokens — consider sweeping`;
-      alerts.push(msg);
+      alerts.push(`💰 *High balance*: **${player.name}** (${short}) has $${formatUsd6(tokenBal)} — consider sweeping`);
     }
 
     // Zero ETH (can't transact)
-    if (celoBal === 0n && player.registered && !onCooldown) {
-      const msg = `🚨 *No gas*: ${player.name} has 0 ETH — cannot transact`;
-      alerts.push(msg);
+    if (ethBal === 0n && player.registered && !onCooldown) {
+      alerts.push(`🚨 *No gas*: **${player.name}** (${short}) has 0 ETH`);
       lastAlerted.set(player.address, now);
     }
+  }
+
+  // Check house agent balance (treasury = house agent wallet)
+  if (config.treasuryKey) {
+    try {
+      const { privateKeyToAccount } = await import("viem/accounts");
+      const houseAddr = privateKeyToAccount(config.treasuryKey).address;
+      const houseBal = await getPlayerBalance(houseAddr);
+      const houseShort = `${houseAddr.slice(0, 6)}...${houseAddr.slice(-4)}`;
+      const houseKey = `house:${houseAddr}`;
+      const lastHouseAlert = lastAlerted.get(houseKey) ?? 0;
+      const houseOnCooldown = Date.now() - lastHouseAlert < ALERT_COOLDOWN_MS;
+
+      if (houseBal < BigInt(2_000_000) && !houseOnCooldown) { // < $2
+        alerts.push(`🏠 *House agent low*: (${houseShort}) has $${formatUsd6(houseBal)} — needs USDC for raffle deposits`);
+        lastAlerted.set(houseKey, Date.now());
+      }
+    } catch {}
   }
 
   return alerts;
