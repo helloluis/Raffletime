@@ -537,7 +537,7 @@ export async function advanceRaffle(vault: Address): Promise<RaffleState> {
     case RaffleState.OPEN: {
       // Only set OPEN if we're not in a post-raffle display phase (RESULT/DISTRIB/RESET)
       const currentPhase = getServerPhase().phase;
-      if (currentPhase !== "RESULT" && currentPhase !== "DISTRIB" && currentPhase !== "RESET") {
+      if (currentPhase !== "RESULT" && currentPhase !== "DISTRIB") {
         setServerPhase("OPEN");
       }
       if (now >= info.closesAt) {
