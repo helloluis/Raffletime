@@ -81,11 +81,15 @@ async function syncParticipants(vault: Address, participantCount: bigint): Promi
     existingEntries = await db.getEntriesForRaffle(vault);
   } catch {}
 
-  const existingAddrs = new Set(existingEntries.map((e: any) => e.agent));
+  const existingByAddr = new Map<string, number>();
+  for (const e of existingEntries) {
+    existingByAddr.set(e.agent, e.tickets || 1);
+  }
   const count = Number(participantCount);
 
-  // If DB already has all participants, skip
-  if (existingAddrs.size >= count && count > 0) return;
+  // If DB total tickets matches on-chain count, skip
+  const dbTotal = Array.from(existingByAddr.values()).reduce((a, b) => a + b, 0);
+  if (dbTotal >= count && count > 0) return;
 
   const GetParticipantsAbi = [
     { name: "getParticipants", type: "function", stateMutability: "view", inputs: [], outputs: [{ name: "", type: "address[]" }] },
@@ -101,10 +105,15 @@ async function syncParticipants(vault: Address, participantCount: bigint): Promi
     seen.set(addr.toLowerCase(), (seen.get(addr.toLowerCase()) || 0) + 1);
   }
 
-  // Only resolve new participants
+  // Upsert: add new participants and update ticket counts for existing ones
   for (const [addr, tickets] of seen.entries()) {
-    if (!existingAddrs.has(addr)) {
+    const existing = existingByAddr.get(addr);
+    if (existing === undefined) {
+      // New participant
       await resolveAgentName(addr as Address);
+      await db.recordEntry(vault, addr, tickets);
+    } else if (existing < tickets) {
+      // Existing participant bought more tickets
       await db.recordEntry(vault, addr, tickets);
     }
   }
