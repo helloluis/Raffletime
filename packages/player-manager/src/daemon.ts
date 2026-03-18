@@ -1,33 +1,25 @@
 /**
  * Autonomous player daemon.
  * Polls the main raffletime app for active raffles and enters house players automatically.
- * Detects testnet/mainnet from the app's health endpoint.
+ * Pre-checks balances before entry, gracefully reassigns broke players.
  */
 
 import { type Address } from "viem";
 import { loadSeed } from "./wallet.js";
 import { loadRegistry, getActivePlayers, ticketsForProfile } from "./registry.js";
 import { enterRaffle, createPlayers, fundPlayers, registerPlayers, rebalancePlayers } from "./operations.js";
-import { checkBalances } from "./monitor.js";
+import { checkBalances, getPlayerBalance } from "./monitor.js";
 import { config } from "./config.js";
 
 const APP_URL = process.env.APP_URL || "https://raffletime.io";
 const POLL_INTERVAL = parseInt(process.env.DAEMON_POLL_MS || "30000"); // 30s
-const MIN_PLAYERS_PER_RAFFLE = parseInt(process.env.MIN_PLAYERS || "8");
-const MAX_PLAYERS_PER_RAFFLE = parseInt(process.env.MAX_PLAYERS || "20");
 const TARGET_REGISTERED = parseInt(process.env.TARGET_REGISTERED || "30");
+const MIN_BALANCE_TO_PLAY = BigInt(process.env.MIN_PLAY_BALANCE || "200000"); // $0.20 USDC
 
 let lastVault: string | null = null;
-let earlyWaveDone: string | null = null;  // vault we've done early wave for
-let lateWaveDone: string | null = null;   // vault we've done late wave for
-let earlyWavePlayers: string[] = [];      // names entered in early wave
-
-interface AppHealth {
-  status: string;
-  agent: string;
-  currentVault: string | null;
-  chainId: number;
-}
+let earlyWaveDone: string | null = null;
+let lateWaveDone: string | null = null;
+let earlyWavePlayers: string[] = [];
 
 interface CurrentRaffle {
   address: string;
@@ -62,6 +54,28 @@ async function sendAlert(message: string) {
   } catch {}
 }
 
+/**
+ * Get players who are funded and ready to play.
+ * Checks on-chain USDC balance — only returns players with >= MIN_BALANCE_TO_PLAY.
+ */
+async function getFundedPlayers(): Promise<ReturnType<typeof getActivePlayers>> {
+  const active = getActivePlayers();
+  const funded: typeof active = [];
+
+  for (const p of active) {
+    try {
+      const bal = await getPlayerBalance(p.address as Address);
+      if (bal >= MIN_BALANCE_TO_PLAY) {
+        funded.push(p);
+      }
+    } catch {
+      // Can't check balance — skip this player
+    }
+  }
+
+  return funded;
+}
+
 async function ensureEnoughPlayers(seedPassword: string): Promise<void> {
   const players = loadRegistry();
   const registered = players.filter((p) => p.registered && !p.paused);
@@ -76,13 +90,11 @@ async function ensureEnoughPlayers(seedPassword: string): Promise<void> {
     });
   }
 
-  // Fund unregistered players
   if (config.treasuryKey) {
     console.log("[daemon] Funding unfunded players...");
     await fundPlayers(seedPassword, config.treasuryKey);
   }
 
-  // Register unregistered players
   const unregistered = loadRegistry().filter((p) => !p.registered && !p.paused);
   if (unregistered.length > 0) {
     console.log(`[daemon] Registering ${unregistered.length} players...`);
@@ -90,15 +102,48 @@ async function ensureEnoughPlayers(seedPassword: string): Promise<void> {
   }
 }
 
+/**
+ * Enter a single player into a raffle with retry.
+ * On nonce error, waits 3s and retries once (Base Sepolia RPC returns stale nonces).
+ */
+async function enterPlayerWithRetry(
+  seedPassword: string,
+  vault: Address,
+  player: ReturnType<typeof getActivePlayers>[0]
+): Promise<{ success: boolean; message: string }> {
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const { entered, skipped } = await enterRaffle(seedPassword, vault, [player]);
+      if (entered.length > 0) {
+        return { success: true, message: entered[0] };
+      }
+      if (skipped.length > 0) {
+        // If it's a nonce error and first attempt, retry after a pause
+        if (attempt === 0 && skipped[0].includes("Nonce")) {
+          await new Promise(r => setTimeout(r, 3000));
+          continue;
+        }
+        return { success: false, message: skipped[0] };
+      }
+      return { success: false, message: `${player.name}: unknown result` };
+    } catch (e) {
+      if (attempt === 0 && String(e).includes("Nonce")) {
+        await new Promise(r => setTimeout(r, 3000));
+        continue;
+      }
+      return { success: false, message: `${player.name}: ${String(e).slice(0, 60)}` };
+    }
+  }
+  return { success: false, message: `${player.name}: failed after retry` };
+}
+
 async function tick(seedPassword: string): Promise<void> {
-  // 1. Check app health — detect chain
-  const health = await fetchJson<AppHealth>(`${APP_URL}/api/health`);
+  // 1. Check app health
+  const health = await fetchJson<{ status: string; chainId: number }>(`${APP_URL}/api/health`);
   if (!health) {
     console.log("[daemon] App unreachable, skipping tick");
     return;
   }
-
-  // Verify we're on the same chain
   if (health.chainId !== config.chainId) {
     console.log(`[daemon] Chain mismatch: app=${health.chainId} us=${config.chainId}, skipping`);
     return;
@@ -114,9 +159,8 @@ async function tick(seedPassword: string): Promise<void> {
   const raffle = current.current;
   const vault = raffle.address;
 
-  // 3. Skip if not OPEN or already entered this raffle
   if (raffle.state !== "OPEN") {
-    console.log(`[daemon] Raffle ${vault.slice(0,10)}... is ${raffle.state}`);
+    console.log(`[daemon] Raffle ${vault.slice(0, 10)}... is ${raffle.state}`);
     return;
   }
 
@@ -140,90 +184,97 @@ async function tick(seedPassword: string): Promise<void> {
   if (earlyWaveDone !== vault && remaining > 15 * 60000) {
     earlyWaveDone = vault;
 
-    const activePlayers = getActivePlayers();
-    const numSeed = 3 + Math.floor(Math.random() * 3); // 3-5
-    const shuffled = [...activePlayers].sort(() => Math.random() - 0.5);
-    const seedPlayers = shuffled.slice(0, numSeed);
-
-    // Each player buys a random number of tickets (1-5) by entering multiple times
-    console.log(`[daemon] Early wave: entering ${seedPlayers.length} players to seed pot`);
-
-    for (const player of seedPlayers) {
-      const ticketCount = 1 + Math.floor(Math.random() * 5); // 1-5 tickets
-      try {
-        for (let t = 0; t < ticketCount; t++) {
-          const { entered, skipped } = await enterRaffle(seedPassword, vault as Address, [player]);
-          if (entered.length > 0 && t === 0) {
-            earlyWavePlayers.push(player.name);
-          }
-          if (entered.length > 0) {
-            console.log(`[daemon] ☕ ${player.name} ticket ${t+1}/${ticketCount}`);
-          } else if (skipped.length > 0) {
-            console.log(`[daemon] ⚠ early-wave skip: ${skipped[0]}`);
-            break; // no point continuing tickets for this player
-          }
-          // Min 5s between tickets for the same player
-          if (t < ticketCount - 1) {
-            await new Promise((r) => setTimeout(r, 5000 + Math.random() * 5000));
-          }
-        }
-      } catch (e) {
-        console.log(`[daemon] ${player.name} failed: ${String(e).slice(0, 60)}`);
-      }
-      // Stagger between players — min 5s, random up to 30s extra
-      await new Promise((r) => setTimeout(r, 5000 + Math.random() * 30000));
+    // Pre-filter to only funded players
+    const fundedPlayers = await getFundedPlayers();
+    if (fundedPlayers.length === 0) {
+      console.log("[daemon] Early wave: no funded players available!");
+      await sendAlert("⚠ Early wave: ALL house players are broke. Fund treasury.");
+      return;
     }
 
-    await sendAlert(`Early wave: **${earlyWavePlayers.length}** house players seeded the pot`);
+    const numSeed = Math.min(3 + Math.floor(Math.random() * 3), fundedPlayers.length); // 3-5
+    const shuffled = [...fundedPlayers].sort(() => Math.random() - 0.5);
+    const candidates = shuffled.slice(0, numSeed + 3); // take extras as backups
+
+    console.log(`[daemon] Early wave: ${fundedPlayers.length} funded players, entering ${numSeed}`);
+
+    let entered = 0;
+    for (const player of candidates) {
+      if (entered >= numSeed) break;
+
+      const ticketCount = 1 + Math.floor(Math.random() * 3); // 1-3 tickets
+      let playerEntered = false;
+
+      for (let t = 0; t < ticketCount; t++) {
+        const result = await enterPlayerWithRetry(seedPassword, vault as Address, player);
+        if (result.success) {
+          if (!playerEntered) {
+            earlyWavePlayers.push(player.name);
+            playerEntered = true;
+            entered++;
+          }
+          console.log(`[daemon] ☕ ${player.name} ticket ${t + 1}/${ticketCount}`);
+        } else {
+          console.log(`[daemon] ⚠ ${result.message}`);
+          break; // stop tickets for this player, try next
+        }
+        if (t < ticketCount - 1) {
+          await new Promise(r => setTimeout(r, 3000 + Math.random() * 5000));
+        }
+      }
+
+      // Stagger between players
+      await new Promise(r => setTimeout(r, 3000 + Math.random() * 15000));
+    }
+
+    console.log(`[daemon] Early wave done: ${entered} players entered`);
+    await sendAlert(`Early wave: **${entered}** house players seeded the pot`);
     return;
   }
 
-  // ── LATE WAVE: final 10 minutes, top up if organic participation is low ──
+  // ── LATE WAVE: final 10 minutes, top up if participation is low ──
   if (lateWaveDone !== vault && remaining < 10 * 60000 && remaining > 3 * 60000) {
     lateWaveDone = vault;
 
-    // Check how many organic (non-house) players are in
     const organicCount = Math.max(0, participants - earlyWavePlayers.length);
 
     if (organicCount < 3) {
-      // Low organic activity — add more house players
-      const activePlayers = getActivePlayers();
+      const fundedPlayers = await getFundedPlayers();
       const alreadyIn = new Set(earlyWavePlayers.map(n => n.toLowerCase()));
-      const available = activePlayers.filter(p => !alreadyIn.has(p.name.toLowerCase()));
-      const numExtra = 3 + Math.floor(Math.random() * 5); // 3-7 more
+      const available = fundedPlayers.filter(p => !alreadyIn.has(p.name.toLowerCase()));
+      const numExtra = Math.min(2 + Math.floor(Math.random() * 3), available.length); // 2-4
       const shuffled = [...available].sort(() => Math.random() - 0.5);
-      const latePlayers = shuffled.slice(0, numExtra);
+      const lateCandidates = shuffled.slice(0, numExtra + 2); // extras as backups
 
-      console.log(`[daemon] Late wave: ${organicCount} organic players detected, entering ${latePlayers.length} more house players`);
+      console.log(`[daemon] Late wave: ${organicCount} organic, entering up to ${numExtra} more (${available.length} funded available)`);
 
-      for (const player of latePlayers) {
-        try {
-          const check = await fetchJson<{ current: CurrentRaffle | null }>(`${APP_URL}/api/raffles/current`);
-          if (!check?.current || check.current.address !== vault || check.current.state !== "OPEN") break;
+      let entered = 0;
+      for (const player of lateCandidates) {
+        if (entered >= numExtra) break;
 
-          const { entered, skipped } = await enterRaffle(seedPassword, vault as Address, [player]);
-          if (entered.length > 0) {
-            console.log(`[daemon] ☕ ${entered[0]}`);
-          } else if (skipped.length > 0) {
-            console.log(`[daemon] ⚠ ${skipped[0]}`);
-          }
-        } catch (e) {
-          console.log(`[daemon] ${player.name} failed: ${String(e).slice(0, 60)}`);
+        // Re-check raffle is still open
+        const check = await fetchJson<{ current: CurrentRaffle | null }>(`${APP_URL}/api/raffles/current`);
+        if (!check?.current || check.current.address !== vault || check.current.state !== "OPEN") break;
+
+        const result = await enterPlayerWithRetry(seedPassword, vault as Address, player);
+        if (result.success) {
+          console.log(`[daemon] ☕ ${result.message}`);
+          entered++;
+        } else {
+          console.log(`[daemon] ⚠ ${result.message}`);
         }
-        // Min 5s between late-wave entries
-        await new Promise((r) => setTimeout(r, 5000 + Math.random() * 10000));
+        await new Promise(r => setTimeout(r, 3000 + Math.random() * 8000));
       }
 
-      await sendAlert(`Late wave: **${latePlayers.length}** more house players entered (only ${organicCount} organic)`);
+      await sendAlert(`Late wave: **${entered}** more house players entered (${organicCount} organic)`);
     } else {
       console.log(`[daemon] Late wave: ${organicCount} organic players — house players not needed`);
-      await sendAlert(`Healthy raffle: **${organicCount}** organic + **${earlyWavePlayers.length}** house players`);
     }
     return;
   }
 
   // ── Between waves: just log status ──
-  console.log(`[daemon] ${vault.slice(0,10)}... pool=$${raffle.totalPool} participants=${participants} (${remainingMin}m left)`);
+  console.log(`[daemon] ${vault.slice(0, 10)}... pool=$${raffle.totalPool} participants=${participants} (${remainingMin}m left)`);
 }
 
 export async function startDaemon(): Promise<void> {
@@ -236,8 +287,8 @@ export async function startDaemon(): Promise<void> {
   console.log(`[daemon] App: ${APP_URL}`);
   console.log(`[daemon] Chain: ${config.chainId}`);
   console.log(`[daemon] Poll interval: ${POLL_INTERVAL / 1000}s`);
-  console.log(`[daemon] Players per raffle: ${MIN_PLAYERS_PER_RAFFLE}-${MAX_PLAYERS_PER_RAFFLE}`);
   console.log(`[daemon] Target registered: ${TARGET_REGISTERED}`);
+  console.log(`[daemon] Min balance to play: $${Number(MIN_BALANCE_TO_PLAY) / 1e6}`);
   console.log("");
 
   await sendAlert("🟢 RaffleTime house player daemon started");
@@ -274,26 +325,22 @@ export async function startDaemon(): Promise<void> {
   }, 15 * 60 * 1000);
 
   // Hourly funding + rebalance at minute 5 of every hour
-  // Ensures players have enough USDC before the raffle gets going
   let lastFundingHour = -1;
   setInterval(async () => {
     const now = new Date();
     const hour = now.getUTCHours();
     const minute = now.getUTCMinutes();
 
-    // Only run at minute 5, once per hour
     if (minute !== 5 || hour === lastFundingHour) return;
     lastFundingHour = hour;
 
     console.log("[daemon] Hourly funding check...");
     try {
-      // 1. Rebalance between players (rich → poor)
       await rebalancePlayers(config.seedPassword);
     } catch (e) {
       console.log(`[daemon] Rebalance error: ${String(e).slice(0, 80)}`);
     }
 
-    // 2. Fund from treasury if players are still depleted
     if (config.treasuryKey) {
       try {
         await fundPlayers(config.seedPassword, config.treasuryKey, {
@@ -303,7 +350,7 @@ export async function startDaemon(): Promise<void> {
         console.log(`[daemon] Treasury funding error: ${String(e).slice(0, 80)}`);
       }
     }
-  }, 30_000); // check every 30s (only acts at minute 5)
+  }, 30_000);
 
   console.log("[daemon] Running. Press Ctrl+C to stop.");
 }

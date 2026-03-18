@@ -31,6 +31,14 @@ const ERC20_ABI = [
   { name: "balanceOf", type: "function", stateMutability: "view", inputs: [{ name: "account", type: "address" }], outputs: [{ name: "", type: "uint256" }] },
 ] as const;
 
+/** Get a player's USDC balance (6-decimal bigint) */
+export async function getPlayerBalance(address: Address): Promise<bigint> {
+  return (await publicClient.readContract({
+    address: config.paymentToken, abi: ERC20_ABI, functionName: "balanceOf",
+    args: [address],
+  })) as bigint;
+}
+
 // ============ Alerting (generic webhook) ============
 
 async function sendAlert(message: string): Promise<void> {
