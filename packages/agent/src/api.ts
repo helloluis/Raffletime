@@ -1360,7 +1360,9 @@ export function createApi(): Hono {
             setStatus('ticket','done', ticketQty + ' ticket' + (ticketQty > 1 ? 's' : '') + ' bought');
             currentStep = 'done';
             setButtonText('You\\'re In!');
-            setButtonDisabled(true);
+            setButtonDisabled(false);
+            // Button now closes modal
+            document.getElementById('modal-action').onclick = function(){ closeJoinModal(); };
           }
         } catch(e){
           showError(e.message || 'Transaction failed');

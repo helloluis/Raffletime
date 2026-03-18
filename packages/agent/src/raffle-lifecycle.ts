@@ -53,7 +53,8 @@ async function resolveAgentName(address: Address): Promise<string | null> {
       name = nameMatch[1].charAt(0).toUpperCase() + nameMatch[1].slice(1).replace(/-/g, " ");
     }
 
-    const isHouse = uri.includes("raffletime.io");
+    // House players have URIs like raffletime.io/agents/arabica.json (not player-*)
+    const isHouse = uri.includes("raffletime.io") && !uri.includes("/player-");
 
     // Write to DB for future lookups
     await db.upsertAgent({
