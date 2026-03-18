@@ -1,6 +1,6 @@
 import { type Address } from "viem";
 
-// Contract addresses — set via environment or defaults for Alfajores testnet
+// Contract addresses — set via environment or defaults for Base Sepolia testnet
 export const config = {
   // Chain
   chainId: parseInt(process.env.CHAIN_ID || "84532"), // Base Sepolia

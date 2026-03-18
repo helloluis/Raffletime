@@ -472,8 +472,6 @@ export function chainLabel(chainId: number): string {
   const names: Record<number, string> = {
     8453: "Base Mainnet",
     84532: "Base Sepolia Testnet",
-    42220: "Celo Mainnet",
-    44787: "Celo Alfajores Testnet",
   };
   return `${names[chainId] ?? "Unknown Chain"} (${chainId})`;
 }

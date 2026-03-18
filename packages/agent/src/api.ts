@@ -84,8 +84,8 @@ async function buildRafflesTableHtml(opts: { limit?: number; page?: number; show
             const wName = result.winner_name;
             const short = `${w.slice(0,6)}...${w.slice(-4)}`;
             winnerHtml = wName
-              ? `${houseIcon}<strong>${wName}</strong> <a href="https://sepolia.celoscan.io/address/${w}" target="_blank" style="color:inherit">${short}</a>`
-              : `<a href="https://sepolia.celoscan.io/address/${w}" target="_blank">${short}</a>`;
+              ? `${houseIcon}<strong>${wName}</strong> <a href="https://sepolia.basescan.org/address/${w}" target="_blank" style="color:inherit">${short}</a>`
+              : `<a href="https://sepolia.basescan.org/address/${w}" target="_blank">${short}</a>`;
           }
         } else if (state === "INVALID") {
           const dt = r.settled_at ? new Date(r.settled_at) : new Date(r.closes_at);
@@ -96,7 +96,7 @@ async function buildRafflesTableHtml(opts: { limit?: number; page?: number; show
         }
 
         const shortVault = `${vault.slice(0,6)}...${vault.slice(-4)}`;
-        const vaultLink = `<a href="https://sepolia.celoscan.io/address/${vault}" target="_blank">${shortVault}</a>`;
+        const vaultLink = `<a href="https://sepolia.basescan.org/address/${vault}" target="_blank">${shortVault}</a>`;
         const nameLink = `<a href="/raffles/${vault}">${houseIcon}${name}</a>`;
         const rowStyle = state === "INVALID" ? ' style="opacity:0.35"' : '';
         rows.push(`<tr${rowStyle}><td>${nameLink}</td><td>${vaultLink}</td><td>${statusHtml}</td><td>${pool}</td><td>${participants}</td><td>${winnerHtml}</td></tr>`);
@@ -197,8 +197,8 @@ async function buildRafflesTableHtml(opts: { limit?: number; page?: number; show
               const wName = dbResult.winner_name;
               const short = `${w.slice(0,6)}...${w.slice(-4)}`;
               winnerHtml = wName
-                ? `${houseIcon}<strong>${wName}</strong> <a href="https://sepolia.celoscan.io/address/${w}" target="_blank" style="color:inherit">${short}</a>`
-                : `<a href="https://sepolia.celoscan.io/address/${w}" target="_blank">${short}</a>`;
+                ? `${houseIcon}<strong>${wName}</strong> <a href="https://sepolia.basescan.org/address/${w}" target="_blank" style="color:inherit">${short}</a>`
+                : `<a href="https://sepolia.basescan.org/address/${w}" target="_blank">${short}</a>`;
               foundWinner = true;
             }
           } catch {}
@@ -207,7 +207,7 @@ async function buildRafflesTableHtml(opts: { limit?: number; page?: number; show
               const winners = (await publicClient.readContract({ address: vault, abi: RaffleVaultAbi, functionName: "getWinners" })) as string[];
               if (winners.length > 0) {
                 const w = winners[0];
-                winnerHtml = `<a href="https://sepolia.celoscan.io/address/${w}" target="_blank">${w.slice(0,6)}...${w.slice(-4)}</a>`;
+                winnerHtml = `<a href="https://sepolia.basescan.org/address/${w}" target="_blank">${w.slice(0,6)}...${w.slice(-4)}</a>`;
               }
             } catch {}
           }
@@ -220,7 +220,7 @@ async function buildRafflesTableHtml(opts: { limit?: number; page?: number; show
         }
 
         const shortVault = `${vault.slice(0,6)}...${vault.slice(-4)}`;
-        const vaultLink = `<a href="https://sepolia.celoscan.io/address/${vault}" target="_blank">${shortVault}</a>`;
+        const vaultLink = `<a href="https://sepolia.basescan.org/address/${vault}" target="_blank">${shortVault}</a>`;
         const nameLink = `<a href="/raffles/${vault}">${houseIcon}${name || "House Raffle"}</a>`;
 
         const rowStyle = state === 6 ? ' style="opacity:0.35"' : '';
@@ -337,7 +337,7 @@ async function buildParticipantsHtml(vault: Address, info: { participantCount: b
 
     const rows = Array.from(seen.entries()).map(([addr, tickets]) => {
       const short = `${addr.slice(0, 6)}...${addr.slice(-4)}`;
-      const link = `<a href="https://sepolia.celoscan.io/address/${addr}" target="_blank" style="color:inherit">${short}</a>`;
+      const link = `<a href="https://sepolia.basescan.org/address/${addr}" target="_blank" style="color:inherit">${short}</a>`;
       const name = agentNames.get(addr);
       const isHouse = housePlayerAddrs.has(addr);
       const isWinner = winnerSet.has(addr);
@@ -705,7 +705,7 @@ export function createApi(): Hono {
     if (accept.includes("application/json")) {
       return c.json({
         name: "RaffleTime",
-        description: "Zero-loss agentic raffle platform on Celo",
+        description: "Zero-loss agentic raffle platform on Base",
         links: {
           raffles: "/raffles",
           api: "/api/raffles",
@@ -1178,10 +1178,10 @@ export function createApi(): Hono {
           if(e.code===4902){
             await window.ethereum.request({method:'wallet_addEthereumChain',params:[{
               chainId: CHAIN_ID,
-              chainName: '${config.chainId === 42220 ? "Celo" : "Celo Sepolia"}',
+              chainName: '${config.chainId === 8453 ? "Base" : "Base Sepolia"}',
               rpcUrls: ['${config.rpcUrl}'],
-              nativeCurrency: {name:'CELO',symbol:'CELO',decimals:18},
-              blockExplorerUrls: ['${config.chainId === 42220 ? "https://celoscan.io" : "https://sepolia.celoscan.io"}']
+              nativeCurrency: {name:'Ether',symbol:'ETH',decimals:18},
+              blockExplorerUrls: ['${config.chainId === 8453 ? "https://basescan.org" : "https://sepolia.basescan.org"}']
             }]});
           }
         }
@@ -1191,7 +1191,7 @@ export function createApi(): Hono {
             type:'ERC20',
             options:{
               address: TOKEN,
-              symbol: '${config.chainId === 42220 ? "cUSD" : "FcUSD"}',
+              symbol: 'USDC',
               decimals: 18
             }
           }});
@@ -1222,7 +1222,7 @@ export function createApi(): Hono {
           await switchChain();
           chainId = await window.ethereum.request({method:'eth_chainId'});
           if(chainId !== CHAIN_ID){
-            throw new Error('Please switch your wallet to ${config.chainId === 42220 ? "Celo" : "Celo Sepolia"} and try again');
+            throw new Error('Please switch your wallet to ${config.chainId === 8453 ? "Base" : "Base Sepolia"} and try again');
           }
         }
       }

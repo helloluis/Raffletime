@@ -240,7 +240,7 @@ const tools = [
   {
     name: "forge_deploy",
     description:
-      "Deploy contracts to Celo Sepolia using the DeployAlfajores script. Returns deployed addresses.",
+      "Deploy contracts to Base Sepolia using the DeployAlfajores script. Returns deployed addresses.",
     inputSchema: {
       type: "object" as const,
       properties: {
@@ -298,7 +298,7 @@ const tools = [
         },
         value: {
           type: "string",
-          description: "ETH/CELO value to send in wei (for payable functions)",
+          description: "ETH/ETH value to send in wei (for payable functions)",
         },
         private_key: {
           type: "string",
@@ -311,7 +311,7 @@ const tools = [
   },
   {
     name: "cast_balance",
-    description: "Get the native (CELO) balance of an address.",
+    description: "Get the native (ETH) balance of an address.",
     inputSchema: {
       type: "object" as const,
       properties: {
@@ -346,18 +346,18 @@ const tools = [
   {
     name: "fund_celo",
     description:
-      "Send native CELO to an address from the house agent wallet.",
+      "Send native ETH to an address from the house agent wallet.",
     inputSchema: {
       type: "object" as const,
       properties: {
         recipient: {
           type: "string",
-          description: "Address to receive CELO",
+          description: "Address to receive ETH",
         },
         amount: {
           type: "string",
           description:
-            'Amount in wei (e.g. "500000000000000000" for 0.5 CELO). Default: 0.5 CELO.',
+            'Amount in wei (e.g. "500000000000000000" for 0.5 ETH). Default: 0.5 ETH.',
         },
       },
       required: ["recipient"],
@@ -830,12 +830,12 @@ async function handleTool(
       wallets.forEach((w) => results.push(`  ${w.name.padEnd(16)} ${w.address} (${w.tickets} ticket${w.tickets > 1 ? 's' : ''})${w.isNew ? '' : ' [reused]'}`));
       results.push('');
 
-      // Fund new wallets with CELO
+      // Fund new wallets with ETH
       const newWallets = wallets.filter(w => w.isNew);
       if (newWallets.length > 0) {
         results.push("--- Funding new agents with ETH ---");
         for (const w of newWallets) {
-          castSend({ to: w.address, pk, rpc, value: "100000000000000000" }); // 0.1 CELO
+          castSend({ to: w.address, pk, rpc, value: "100000000000000000" }); // 0.1 ETH
           results.push(`  ${w.name.padEnd(16)} funded 0.1 ETH`);
         }
         results.push('');
