@@ -41,6 +41,29 @@ export function getWalletClient(): WalletClient {
   return _walletClient;
 }
 
+/**
+ * Wait for a TX receipt by polling. More reliable than viem's built-in
+ * waitForTransactionReceipt which hangs on some RPC providers.
+ */
+export async function waitForTx(hash: `0x${string}`, timeoutMs = 60_000): Promise<any> {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    try {
+      const receipt = await publicClient.getTransactionReceipt({ hash });
+      if (receipt) return receipt;
+    } catch {
+      // receipt not available yet
+    }
+    await new Promise(r => setTimeout(r, 2000));
+  }
+  // Last check before throwing
+  try {
+    const receipt = await publicClient.getTransactionReceipt({ hash });
+    if (receipt) return receipt;
+  } catch {}
+  throw new Error(`TX receipt timeout after ${timeoutMs / 1000}s: ${hash.slice(0, 14)}...`);
+}
+
 export function getAgentAddress(): Address {
   if (!config.privateKey) {
     throw new Error("PRIVATE_KEY environment variable is required");

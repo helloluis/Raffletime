@@ -1,5 +1,5 @@
 import { type Address, formatEther, parseEventLogs } from "viem";
-import { publicClient, getWalletClient, getAgentAddress } from "./chain.js";
+import { publicClient, getWalletClient, getAgentAddress, waitForTx } from "./chain.js";
 import {
   RaffleFactoryAbi,
   RaffleVaultAbi,
@@ -282,7 +282,7 @@ export async function ensureAgentRegistered(): Promise<void> {
     functionName: "approve",
     args: [config.contracts.agentRegistry, bondAmount],
   });
-  await publicClient.waitForTransactionReceipt({ hash: approveTx, timeout: 60_000 });
+  await waitForTx(approveTx);
 
   // Register with bond
   const hash = await writeContract({
@@ -291,7 +291,7 @@ export async function ensureAgentRegistered(): Promise<void> {
     functionName: "registerAgent",
     args: [config.agentURI, bondAmount],
   });
-  await publicClient.waitForTransactionReceipt({ hash, timeout: 60_000 });
+  await waitForTx(hash);
   console.log("[lifecycle] Agent registered:", hash);
 }
 
@@ -322,7 +322,7 @@ export async function createHouseRaffle(
     functionName: "approve",
     args: [config.contracts.factory, deposit],
   });
-  await publicClient.waitForTransactionReceipt({ hash: approveTx, timeout: 60_000 });
+  await waitForTx(approveTx);
 
   // Create raffle — duration aligns to the top of the next hour
   const now = new Date();
@@ -354,7 +354,7 @@ export async function createHouseRaffle(
     functionName: "createRaffle",
     args: [params],
   });
-  const receipt = await publicClient.waitForTransactionReceipt({ hash, timeout: 60_000 });
+  const receipt = await waitForTx(hash);
 
   // Extract vault address from RaffleCreated event logs (not index-based)
   const RaffleCreatedAbi = [
@@ -407,7 +407,7 @@ export async function closeRaffle(vault: Address): Promise<void> {
     abi: RaffleVaultAbi,
     functionName: "closeRaffle",
   });
-  await publicClient.waitForTransactionReceipt({ hash, timeout: 60_000 });
+  await waitForTx(hash);
   console.log("[lifecycle] Raffle closed:", hash);
 }
 
@@ -421,7 +421,7 @@ export async function requestDraw(vault: Address): Promise<{ requestId: string |
     abi: RaffleVaultAbi,
     functionName: "requestDraw",
   });
-  const receipt = await publicClient.waitForTransactionReceipt({ hash, timeout: 60_000 });
+  const receipt = await waitForTx(hash);
   console.log("[lifecycle] Draw requested:", hash);
 
   // Parse DrawRequested event to capture VRF requestId
@@ -445,7 +445,7 @@ export async function requestDraw(vault: Address): Promise<{ requestId: string |
         functionName: "fulfillRequest",
         args: [requestId],
       });
-      await publicClient.waitForTransactionReceipt({ hash: fulfillHash, timeout: 60_000 });
+      await waitForTx(fulfillHash);
       console.log("[lifecycle] Mock VRF fulfilled:", fulfillHash);
     } catch (e) {
       console.log("[lifecycle] Mock VRF auto-fulfill failed:", String(e).slice(0, 120));
@@ -490,7 +490,7 @@ export async function distributePrizes(vault: Address): Promise<void> {
     abi: RaffleVaultAbi,
     functionName: "distributePrizes",
   });
-  await publicClient.waitForTransactionReceipt({ hash, timeout: 60_000 });
+  await waitForTx(hash);
   console.log("[lifecycle] Prizes distributed:", hash);
 }
 
@@ -502,7 +502,7 @@ export async function claimDeposit(vault: Address): Promise<void> {
     functionName: "claimDeposit",
     args: [vault],
   });
-  await publicClient.waitForTransactionReceipt({ hash, timeout: 60_000 });
+  await waitForTx(hash);
   console.log("[lifecycle] Deposit claimed:", hash);
 }
 
@@ -663,7 +663,7 @@ export async function advanceRaffle(vault: Address): Promise<RaffleState> {
             abi: RaffleVaultAbi,
             functionName: "distributeRefunds",
           });
-          await publicClient.waitForTransactionReceipt({ hash: refundHash, timeout: 60_000 });
+          await waitForTx(refundHash);
           console.log("[lifecycle] Refunds distributed:", refundHash);
         } catch (e) {
           console.log("[lifecycle] Refunds already distributed or no entries");
