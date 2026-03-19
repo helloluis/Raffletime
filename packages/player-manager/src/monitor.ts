@@ -6,7 +6,8 @@
  * - Zero ETH (can't pay gas)
  */
 
-import { createPublicClient, http, defineChain, type Address } from "viem";
+import { createPublicClient, http, type Address, type Chain } from "viem";
+import { base, baseSepolia } from "viem/chains";
 import { loadRegistry, type Player } from "./registry.js";
 import { config } from "./config.js";
 
@@ -18,12 +19,9 @@ function formatUsd6(raw: bigint): string {
 const lastAlerted = new Map<string, number>();
 const ALERT_COOLDOWN_MS = 6 * 60 * 60 * 1000;
 
-const chain = defineChain({
-  id: config.chainId,
-  name: config.chainId === 8453 ? "Base" : "Base Sepolia",
-  nativeCurrency: { name: "Ether", symbol: "ETH", decimals: 18 },
-  rpcUrls: { default: { http: [config.rpcUrl] } },
-});
+const chain: Chain = config.chainId === 8453
+  ? { ...base, rpcUrls: { default: { http: [config.rpcUrl] } } }
+  : { ...baseSepolia, rpcUrls: { default: { http: [config.rpcUrl] } } };
 
 const publicClient = createPublicClient({ chain, transport: http(config.rpcUrl) });
 

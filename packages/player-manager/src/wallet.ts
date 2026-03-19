@@ -7,7 +7,8 @@
 import WDK from "@tetherto/wdk";
 import WalletManagerEvm from "@tetherto/wdk-wallet-evm";
 import { mnemonicToAccount } from "viem/accounts";
-import { createWalletClient, http, defineChain, type Address, type WalletClient } from "viem";
+import { createWalletClient, http, type Address, type WalletClient, type Chain } from "viem";
+import { base, baseSepolia } from "viem/chains";
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from "fs";
 import { resolve, dirname } from "path";
 import { fileURLToPath } from "url";
@@ -120,12 +121,9 @@ export function getPlayerWalletClient(
   const cacheKey = `${index}:${rpcUrl}`;
   if (_walletClientCache.has(cacheKey)) return _walletClientCache.get(cacheKey)!;
 
-  const chain = defineChain({
-    id: chainId,
-    name: chainId === 8453 ? "Base" : "Base Sepolia",
-    nativeCurrency: { name: "Ether", symbol: "ETH", decimals: 18 },
-    rpcUrls: { default: { http: [rpcUrl] } },
-  });
+  const chain: Chain = chainId === 8453
+    ? { ...base, rpcUrls: { default: { http: [rpcUrl] } } }
+    : { ...baseSepolia, rpcUrls: { default: { http: [rpcUrl] } } };
 
   const account = mnemonicToAccount(mnemonic, { addressIndex: index });
   const client = createWalletClient({ account, chain, transport: http(rpcUrl) });
