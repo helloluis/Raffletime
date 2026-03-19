@@ -278,12 +278,13 @@ export async function enterRaffle(
 
     try {
       for (let t = 0; t < tickets; t++) {
-        // Approve ticket price — nonceManager tracks sequential nonces in-memory
+        // Approve ticket price
         const approveHash = await wallet.writeContract({
           address: config.paymentToken, abi: ERC20_ABI, functionName: "approve",
           args: [vault, ticketPrice],
         chain } as any);
         await publicClient.waitForTransactionReceipt({ hash: approveHash });
+        await new Promise(r => setTimeout(r, 1500)); // breathe between approve and enter
 
         // Enter raffle
         const enterHash = await wallet.writeContract({
@@ -291,6 +292,11 @@ export async function enterRaffle(
           args: [config.paymentToken, beneficiary],
         chain } as any);
         await publicClient.waitForTransactionReceipt({ hash: enterHash });
+
+        // Breathe between tickets
+        if (t < tickets - 1) {
+          await new Promise(r => setTimeout(r, 2000));
+        }
       }
 
       updatePlayer(player.index, {
