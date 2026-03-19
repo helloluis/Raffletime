@@ -971,6 +971,17 @@ export function createApi(): Hono {
           var d = JSON.parse(e.data);
 
           if(d.type === 'tick'){
+            // New vault arrived while in post-raffle phase — switch to OPEN
+            if(d.vault !== vault && phase !== 'OPEN'){
+              vault = d.vault;
+              window._currentVault = vault;
+              closesAt = d.closesAt;
+              poolEl.textContent = '$' + parseFloat(d.pool).toFixed(2);
+              partEl.textContent = d.participants;
+              if(partLink) partLink.href = '/raffles/'+vault;
+              showOpen();
+              return;
+            }
             // Update pool/participants only during OPEN
             if(phase === 'OPEN'){
               poolEl.textContent = '$' + parseFloat(d.pool).toFixed(2);
