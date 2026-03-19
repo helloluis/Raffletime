@@ -87,9 +87,9 @@ async function withRetry<T>(
     }
   }
 
-  // All attempts exhausted
+  // All attempts exhausted — short backoff, cap at 60s
   consecutiveFailures++;
-  const backoffSecs = Math.min(60 * 16, Math.pow(2, consecutiveFailures) * 15); // 15s, 30s, 60s … 16min cap
+  const backoffSecs = Math.min(60, consecutiveFailures * 15); // 15s, 30s, 45s, 60s cap
   backoffUntil = Date.now() + backoffSecs * 1000;
   const alertMsg = `⚠️ RaffleTime agent: **${label}** failed ${maxAttempts}x in a row (${consecutiveFailures} consecutive). Backing off ${backoffSecs}s.`;
   console.error(`[scheduler] ${alertMsg}`);
@@ -210,7 +210,16 @@ export async function runSchedulerTick(
       return;
     }
 
-    // No active raffle — create a new one
+    // No active raffle — check if one was created by a timed-out TX
+    await recoverExistingRaffle();
+    if (currentVault) {
+      console.log("[scheduler] Recovered raffle from timed-out TX:", currentVault);
+      setServerPhase("OPEN");
+      consecutiveFailures = 0;
+      backoffUntil = 0;
+      return;
+    }
+
     const raffleName = nextHouseRaffleName();
     console.log(`[scheduler] Creating new house raffle: "${raffleName}"...`);
     currentVault = await withRetry(
