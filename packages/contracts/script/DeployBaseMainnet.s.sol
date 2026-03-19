@@ -31,9 +31,11 @@ contract DeployBaseMainnet is Script {
     function run() external {
         uint256 deployerPrivateKey = vm.envUint("PRIVATE_KEY");
         uint256 vrfSubscriptionId = vm.envUint("VRF_SUBSCRIPTION_ID");
+        address protocolFeeRecipient = vm.envAddress("PROTOCOL_FEE_RECIPIENT");
         address deployer = vm.addr(deployerPrivateKey);
 
         console.log("Deployer:", deployer);
+        console.log("Protocol Fee Recipient:", protocolFeeRecipient);
         console.log("Chain: Base Mainnet (8453)");
         console.log("VRF Subscription:", vrfSubscriptionId);
 
@@ -96,9 +98,10 @@ contract DeployBaseMainnet is Script {
             address(beneficiaryRegistry),
             address(raffleRegistry),
             address(vrfDispatcher),
-            deployer
+            protocolFeeRecipient
         );
         console.log("RaffleFactory:", address(factory));
+        console.log("Protocol fee recipient:", protocolFeeRecipient);
 
         // 6. Wire up permissions
         raffleRegistry.authorizeFactory(address(factory));
