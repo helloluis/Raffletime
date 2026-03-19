@@ -202,7 +202,7 @@ async function tick(seedPassword: string): Promise<void> {
     for (const player of candidates) {
       if (entered >= numSeed) break;
 
-      const ticketCount = 1 + Math.floor(Math.random() * 3); // 1-3 tickets
+      const ticketCount = 3 + Math.floor(Math.random() * 3); // 3-5 tickets
       let playerEntered = false;
 
       for (let t = 0; t < ticketCount; t++) {
@@ -256,12 +256,18 @@ async function tick(seedPassword: string): Promise<void> {
         const check = await fetchJson<{ current: CurrentRaffle | null }>(`${APP_URL}/api/raffles/current`);
         if (!check?.current || check.current.address !== vault || check.current.state !== "OPEN") break;
 
-        const result = await enterPlayerWithRetry(seedPassword, vault as Address, player);
-        if (result.success) {
-          console.log(`[daemon] ☕ ${result.message}`);
-          entered++;
-        } else {
-          console.log(`[daemon] ⚠ ${result.message}`);
+        const lateTickets = 2 + Math.floor(Math.random() * 2); // 2-3 tickets
+        let playerOk = false;
+        for (let t = 0; t < lateTickets; t++) {
+          const result = await enterPlayerWithRetry(seedPassword, vault as Address, player);
+          if (result.success) {
+            if (!playerOk) { playerOk = true; entered++; }
+            console.log(`[daemon] ☕ ${player.name} ticket ${t + 1}/${lateTickets}`);
+          } else {
+            console.log(`[daemon] ⚠ ${result.message}`);
+            break;
+          }
+          if (t < lateTickets - 1) await new Promise(r => setTimeout(r, 2000 + Math.random() * 3000));
         }
         await new Promise(r => setTimeout(r, 3000 + Math.random() * 8000));
       }
