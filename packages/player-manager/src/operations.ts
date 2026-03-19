@@ -140,7 +140,7 @@ export async function fundPlayers(
       const hash = await treasuryWallet.sendTransaction({
         to: player.address as Address, value: ethAmt, chain,
       } as any);
-      await publicClient.waitForTransactionReceipt({ hash });
+      await publicClient.waitForTransactionReceipt({ hash, timeout: 30_000 });
       console.log(`  ${player.name}: funded ${Number(ethAmt) / 1e18} ETH`);
     }
 
@@ -161,14 +161,14 @@ export async function fundPlayers(
           address: config.paymentToken, abi: ERC20_ABI, functionName: "mint",
           args: [player.address as Address, needed],
         } as any);
-        await publicClient.waitForTransactionReceipt({ hash });
+        await publicClient.waitForTransactionReceipt({ hash, timeout: 30_000 });
         console.log(`  ${player.name}: minted $${(Number(needed) / (10 ** tokenDecimals)).toFixed(2)}`);
       } else {
         const hash = await treasuryWallet.writeContract({
           address: config.paymentToken, abi: ERC20_ABI, functionName: "transfer",
           args: [player.address as Address, needed],
         } as any);
-        await publicClient.waitForTransactionReceipt({ hash });
+        await publicClient.waitForTransactionReceipt({ hash, timeout: 30_000 });
         console.log(`  ${player.name}: transferred $${(Number(needed) / (10 ** tokenDecimals)).toFixed(2)}`);
       }
     }
@@ -210,7 +210,7 @@ export async function registerPlayers(seedPassword: string): Promise<void> {
         address: config.paymentToken, abi: ERC20_ABI, functionName: "approve",
         args: [config.agentRegistry, bond],
       } as any);
-      await publicClient.waitForTransactionReceipt({ hash: approveHash });
+      await publicClient.waitForTransactionReceipt({ hash: approveHash, timeout: 30_000 });
     }
 
     // Register agent
@@ -219,7 +219,7 @@ export async function registerPlayers(seedPassword: string): Promise<void> {
       address: config.agentRegistry, abi: AGENT_REG_ABI, functionName: "registerAgent",
       args: [uri, bond],
     } as any);
-    await publicClient.waitForTransactionReceipt({ hash: regHash });
+    await publicClient.waitForTransactionReceipt({ hash: regHash, timeout: 30_000 });
 
     updatePlayer(player.index, {
       registered: true,
@@ -282,7 +282,7 @@ export async function enterRaffle(
           address: config.paymentToken, abi: ERC20_ABI, functionName: "approve",
           args: [vault, ticketPrice],
         } as any);
-        await publicClient.waitForTransactionReceipt({ hash: approveHash });
+        await publicClient.waitForTransactionReceipt({ hash: approveHash, timeout: 30_000 });
         await new Promise(r => setTimeout(r, 1500)); // breathe between approve and enter
 
         // Enter raffle
@@ -290,7 +290,7 @@ export async function enterRaffle(
           address: vault, abi: VAULT_ABI, functionName: "enterRaffle",
           args: [config.paymentToken, beneficiary],
         } as any);
-        await publicClient.waitForTransactionReceipt({ hash: enterHash });
+        await publicClient.waitForTransactionReceipt({ hash: enterHash, timeout: 30_000 });
 
         // Breathe between tickets
         if (t < tickets - 1) {
@@ -343,7 +343,7 @@ export async function rebalancePlayers(
       address: config.paymentToken, abi: ERC20_ABI, functionName: "transfer",
       args: [poorPlayer.player.address as Address, needed],
     } as any);
-    await publicClient.waitForTransactionReceipt({ hash });
+    await publicClient.waitForTransactionReceipt({ hash, timeout: 30_000 });
 
     donor.balance -= needed;
     console.log(`  ${donor.player.name} → ${poorPlayer.player.name}: $${formatUsd6(needed)}`);
@@ -373,7 +373,7 @@ export async function sweepWinnings(
         address: config.paymentToken, abi: ERC20_ABI, functionName: "transfer",
         args: [coldWallet, sweepAmount],
       } as any);
-      await publicClient.waitForTransactionReceipt({ hash });
+      await publicClient.waitForTransactionReceipt({ hash, timeout: 30_000 });
       console.log(`  ${p.name}: swept $${formatUsd6(sweepAmount)} → cold wallet`);
     }
   }
