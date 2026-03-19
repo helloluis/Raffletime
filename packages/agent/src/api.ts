@@ -84,8 +84,8 @@ async function buildRafflesTableHtml(opts: { limit?: number; page?: number; show
             const wName = result.winner_name;
             const short = `${w.slice(0,6)}...${w.slice(-4)}`;
             winnerHtml = wName
-              ? `${houseIcon}<strong>${wName}</strong> <a href="https://sepolia.basescan.org/address/${w}" target="_blank" style="color:inherit">${short}</a>`
-              : `<a href="https://sepolia.basescan.org/address/${w}" target="_blank">${short}</a>`;
+              ? `${houseIcon}<strong>${wName}</strong> <a href="${config.chainId === 8453 ? 'https://basescan.org' : 'https://sepolia.basescan.org'}/address/${w}" target="_blank" style="color:inherit">${short}</a>`
+              : `<a href="${config.chainId === 8453 ? 'https://basescan.org' : 'https://sepolia.basescan.org'}/address/${w}" target="_blank">${short}</a>`;
           }
         } else if (state === "INVALID") {
           const dt = r.settled_at ? new Date(r.settled_at) : new Date(r.closes_at);
@@ -96,7 +96,7 @@ async function buildRafflesTableHtml(opts: { limit?: number; page?: number; show
         }
 
         const shortVault = `${vault.slice(0,6)}...${vault.slice(-4)}`;
-        const vaultLink = `<a href="https://sepolia.basescan.org/address/${vault}" target="_blank">${shortVault}</a>`;
+        const vaultLink = `<a href="${config.chainId === 8453 ? 'https://basescan.org' : 'https://sepolia.basescan.org'}/address/${vault}" target="_blank">${shortVault}</a>`;
         const nameLink = `<a href="/raffles/${vault}">${houseIcon}${name}</a>`;
         const rowStyle = state === "INVALID" ? ' style="opacity:0.35"' : '';
         rows.push(`<tr${rowStyle}><td>${nameLink}</td><td>${vaultLink}</td><td>${statusHtml}</td><td>${pool}</td><td>${participants}</td><td>${winnerHtml}</td></tr>`);
@@ -197,8 +197,8 @@ async function buildRafflesTableHtml(opts: { limit?: number; page?: number; show
               const wName = dbResult.winner_name;
               const short = `${w.slice(0,6)}...${w.slice(-4)}`;
               winnerHtml = wName
-                ? `${houseIcon}<strong>${wName}</strong> <a href="https://sepolia.basescan.org/address/${w}" target="_blank" style="color:inherit">${short}</a>`
-                : `<a href="https://sepolia.basescan.org/address/${w}" target="_blank">${short}</a>`;
+                ? `${houseIcon}<strong>${wName}</strong> <a href="${config.chainId === 8453 ? 'https://basescan.org' : 'https://sepolia.basescan.org'}/address/${w}" target="_blank" style="color:inherit">${short}</a>`
+                : `<a href="${config.chainId === 8453 ? 'https://basescan.org' : 'https://sepolia.basescan.org'}/address/${w}" target="_blank">${short}</a>`;
               foundWinner = true;
             }
           } catch {}
@@ -207,7 +207,7 @@ async function buildRafflesTableHtml(opts: { limit?: number; page?: number; show
               const winners = (await publicClient.readContract({ address: vault, abi: RaffleVaultAbi, functionName: "getWinners" })) as string[];
               if (winners.length > 0) {
                 const w = winners[0];
-                winnerHtml = `<a href="https://sepolia.basescan.org/address/${w}" target="_blank">${w.slice(0,6)}...${w.slice(-4)}</a>`;
+                winnerHtml = `<a href="${config.chainId === 8453 ? 'https://basescan.org' : 'https://sepolia.basescan.org'}/address/${w}" target="_blank">${w.slice(0,6)}...${w.slice(-4)}</a>`;
               }
             } catch {}
           }
@@ -220,7 +220,7 @@ async function buildRafflesTableHtml(opts: { limit?: number; page?: number; show
         }
 
         const shortVault = `${vault.slice(0,6)}...${vault.slice(-4)}`;
-        const vaultLink = `<a href="https://sepolia.basescan.org/address/${vault}" target="_blank">${shortVault}</a>`;
+        const vaultLink = `<a href="${config.chainId === 8453 ? 'https://basescan.org' : 'https://sepolia.basescan.org'}/address/${vault}" target="_blank">${shortVault}</a>`;
         const nameLink = `<a href="/raffles/${vault}">${houseIcon}${name || "House Raffle"}</a>`;
 
         const rowStyle = state === 6 ? ' style="opacity:0.35"' : '';
@@ -337,7 +337,7 @@ async function buildParticipantsHtml(vault: Address, info: { participantCount: b
 
     const rows = Array.from(seen.entries()).map(([addr, tickets]) => {
       const short = `${addr.slice(0, 6)}...${addr.slice(-4)}`;
-      const link = `<a href="https://sepolia.basescan.org/address/${addr}" target="_blank" style="color:inherit">${short}</a>`;
+      const link = `<a href="${config.chainId === 8453 ? 'https://basescan.org' : 'https://sepolia.basescan.org'}/address/${addr}" target="_blank" style="color:inherit">${short}</a>`;
       const name = agentNames.get(addr);
       const isHouse = housePlayerAddrs.has(addr);
       const isWinner = winnerSet.has(addr);
@@ -751,7 +751,7 @@ export function createApi(): Hono {
     const ticketPrice = formatUsd6(config.raffle.ticketPriceUsd6);
 
     return c.html(layout("Home", `
-    <h1 class="site-title"><span>Raffle</span>time <span class="testnet-pill">Testnet</span> <span id="utc-clock" style="font-size:0.55rem;font-weight:700;font-family:'Space Mono',monospace;opacity:0.7;vertical-align:middle;letter-spacing:0.1em"></span></h1>
+    <h1 class="site-title"><span>Raffle</span>time ${config.chainId === 84532 ? '<span class="testnet-pill">Testnet</span>' : ''} <span id="utc-clock" style="font-size:0.55rem;font-weight:700;font-family:'Space Mono',monospace;opacity:0.7;vertical-align:middle;letter-spacing:0.1em"></span></h1>
     <p class="site-tagline" id="tagline"></p>
     <script>(function(){var cl=document.getElementById('utc-clock');function u(){var n=new Date();cl.textContent=String(n.getUTCHours()).padStart(2,'0')+':'+String(n.getUTCMinutes()).padStart(2,'0')+':'+String(n.getUTCSeconds()).padStart(2,'0')+' UTC';}u();setInterval(u,1000);})();</script>
     <script>
@@ -936,7 +936,7 @@ export function createApi(): Hono {
         var winnerHtml = '—';
         if(d.state === 'SETTLED' && d.winner){
           var w = d.winner;
-          winnerHtml = '<a href="https://sepolia.basescan.org/address/'+w+'" target="_blank">'+w.slice(0,6)+'...'+w.slice(-4)+'</a>';
+          winnerHtml = '<a href="${config.chainId === 8453 ? 'https://basescan.org' : 'https://sepolia.basescan.org'}/address/'+w+'" target="_blank">'+w.slice(0,6)+'...'+w.slice(-4)+'</a>';
         } else if(d.state === 'INVALID'){
           winnerHtml = '<em>Invalid</em>';
         }
@@ -945,7 +945,7 @@ export function createApi(): Hono {
         if(d.state === 'INVALID') tr.style.opacity = '0.35';
         var hIcon = '<svg width="12" height="12" viewBox="0 0 12 12" fill="none" xmlns="http://www.w3.org/2000/svg" style="vertical-align:-1px;margin-right:3px"><path d="M6 1L1 5.5V11H4.5V7.5H7.5V11H11V5.5L6 1Z" fill="currentColor"/></svg>';
         tr.innerHTML = '<td><a href="/raffles/'+d.vault+'">'+hIcon+(d.name||'House Raffle')+'</a></td>'
-          + '<td><a href="https://sepolia.basescan.org/address/'+d.vault+'" target="_blank">'+shortVault+'</a></td>'
+          + '<td><a href="${config.chainId === 8453 ? 'https://basescan.org' : 'https://sepolia.basescan.org'}/address/'+d.vault+'" target="_blank">'+shortVault+'</a></td>'
           + '<td>'+d.ended+'</td>'
           + '<td>$'+parseFloat(d.pool).toFixed(2)+'</td>'
           + '<td>'+d.participants+'</td>'
@@ -1341,7 +1341,7 @@ export function createApi(): Hono {
 
     <div class="section">
       <h2>Overview</h2>
-      <p>RaffleTime runs hourly house raffles on <strong>Base Sepolia</strong> (testnet) with <strong>USDC</strong> as the payment token. Agents can enter via <strong>x402 HTTP payments</strong> (no wallet needed) or <strong>direct on-chain calls</strong>.</p>
+      <p>RaffleTime runs hourly house raffles on <strong>${chainLabel(config.chainId)}</strong> with <strong>USDC</strong> as the payment token. Agents can enter via <strong>x402 HTTP payments</strong> (no wallet needed) or <strong>direct on-chain calls</strong>.</p>
       <table class="info-table">
         <tr><td>Chain</td><td>${chainLabel(config.chainId)}</td></tr>
         <tr><td>Payment Token</td><td>USDC (${explorerLink(config.contracts.paymentToken, config.chainId)})</td></tr>
@@ -1509,7 +1509,7 @@ Content-Type: application/json
         const dbRaffle = await db.getRaffle(address).catch(() => null);
         const dbResult = await db.getResult(address).catch(() => null);
         const isMock = !!process.env.MOCK_VRF_DISPATCHER_ADDRESS;
-        const basescanBase = `https://sepolia.basescan.org/tx/`;
+        const basescanBase = config.chainId === 8453 ? "https://basescan.org/tx/" : "https://sepolia.basescan.org/tx/";
         const txLink = (hash: string) =>
           `<a href="${basescanBase}${hash}" target="_blank" style="color:inherit;border-bottom:1px dashed currentColor;font-family:monospace">${hash.slice(0,10)}...${hash.slice(-8)}</a>`;
 
