@@ -2,27 +2,64 @@ import { type Address } from "viem";
 import { config } from "./config.js";
 import { broadcast } from "./ws-hub.js";
 import {
-  advanceRaffle,
-  closeRaffle,
-  createHouseRaffle,
   getActiveRaffles,
   getRaffleInfo,
+  getVaultState,
   RaffleState,
   stateNames,
+  // Fire-and-forget TX senders
+  sendCloseRaffleTx,
+  sendRequestDrawTx,
+  sendMockVrfFulfillTx,
+  sendDistributePrizesTx,
+  sendClaimDepositTx,
+  sendDistributeRefundsTx,
+  sendApproveTx,
+  sendCreateRaffleTx,
+  // Read helpers
+  getAllowance,
+  getCreateDeposit,
+  getFactoryVaultCount,
+  detectNewVault,
+  getAgentBalance,
+  syncRaffleState,
+  recordSettlement,
+  // Blocking ops (used only for orphan check and one-time startup)
+  closeRaffle,
 } from "./raffle-lifecycle.js";
 import { getAgentAddress } from "./chain.js";
 import {
   saveRaffleMeta,
-  getRaffleMeta,
   nextHouseRaffleName,
   randomCoverImage,
 } from "./raffle-store.js";
 
-// Track the current house raffle
+// ============ Pending TX tracker ============
+
+interface PendingTx {
+  hash: `0x${string}`;
+  operation: string;
+  sentAt: number;
+  tickCount: number;
+}
+let pendingTx: PendingTx | null = null;
+
+const PENDING_TX_TIMEOUT_TICKS = 8; // ~120s at 15s poll
+
+// ============ Creation state machine ============
+
+type CreationPhase = "IDLE" | "CREATING_APPROVE" | "CREATING_RAFFLE";
+let creationPhase: CreationPhase = "IDLE";
+let creationVaultCountBefore: bigint = 0n;
+let creationRaffleName: string = "";
+
+// ============ Track the current house raffle ============
+
 let currentVault: Address | null = null;
 
-// Server-side phase tracking for the post-raffle timeline
-export type ServerPhase = "OPEN" | "DRAWING" | "RESULT" | "DISTRIB" | "RESET" | "INVALID" | "REFUND";
+// ============ Server-side phase tracking ============
+
+export type ServerPhase = "OPEN" | "DRAWING" | "RESULT" | "DISTRIB" | "RESET" | "STNDBY" | "INVALID" | "REFUND";
 let currentPhase: ServerPhase = "OPEN";
 let phaseChangedAt: number = Date.now();
 let lastWinner: { address: string; name: string | null; prize: string } | null = null;
@@ -36,18 +73,15 @@ export function setServerPhase(phase: ServerPhase, winner?: typeof lastWinner) {
     currentPhase = phase;
     phaseChangedAt = Date.now();
     if (winner) lastWinner = winner;
-    console.log(`[scheduler] Phase → ${phase}`);
-    // Push phase change to all WebSocket clients
+    console.log(`[scheduler] Phase -> ${phase}`);
     broadcast({ type: "phase", phase, winner: lastWinner });
   }
 }
 
-// Guard against overlapping ticks
-let tickInProgress = false;
+// ============ Backoff / alerting ============
 
-// Consecutive failure tracking for retry/backoff/alert
 let consecutiveFailures = 0;
-let backoffUntil = 0; // epoch ms — skip ticks until this time
+let backoffUntil = 0;
 
 async function sendAlert(message: string): Promise<void> {
   if (!config.alertApiKey) return;
@@ -60,48 +94,12 @@ async function sendAlert(message: string): Promise<void> {
   } catch {}
 }
 
-/**
- * Run fn with retry: 1 attempt/second up to maxAttempts, then exponential backoff.
- * Alerts the owner after maxAttempts failures.
- */
-async function withRetry<T>(
-  fn: () => Promise<T>,
-  label: string,
-  maxAttempts = 3
-): Promise<T> {
-  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-    try {
-      const result = await fn();
-      if (consecutiveFailures > 0) {
-        console.log(`[scheduler] ${label} recovered after ${consecutiveFailures} failure(s)`);
-        consecutiveFailures = 0;
-        backoffUntil = 0;
-      }
-      return result;
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      console.error(`[scheduler] ${label} attempt ${attempt}/${maxAttempts} failed: ${msg.slice(0, 120)}`);
-      if (attempt < maxAttempts) {
-        await new Promise((r) => setTimeout(r, 1000)); // 1s between retries
-      }
-    }
-  }
+// ============ Guard ============
 
-  // All attempts exhausted — short backoff, cap at 60s
-  consecutiveFailures++;
-  const backoffSecs = Math.min(60, consecutiveFailures * 15); // 15s, 30s, 45s, 60s cap
-  backoffUntil = Date.now() + backoffSecs * 1000;
-  const alertMsg = `⚠️ RaffleTime agent: **${label}** failed ${maxAttempts}x in a row (${consecutiveFailures} consecutive). Backing off ${backoffSecs}s.`;
-  console.error(`[scheduler] ${alertMsg}`);
-  await sendAlert(alertMsg);
+let tickInProgress = false;
 
-  throw new Error(`${label} failed after ${maxAttempts} attempts`);
-}
+// ============ Recovery (unchanged) ============
 
-/**
- * On startup, scan for any existing active raffle created by this agent.
- * Prevents orphaned raffles and duplicate creation after restart.
- */
 export async function recoverExistingRaffle(): Promise<void> {
   try {
     const agentAddress = getAgentAddress();
@@ -109,8 +107,7 @@ export async function recoverExistingRaffle(): Promise<void> {
     const { RaffleVaultAbi } = await import("./abis.js");
     const db = await import("./db.js");
 
-    // First: check DB for vaults in mid-lifecycle states (CLOSED/DRAWING/PAYOUT)
-    // These fall off the registry's active list but still need attention
+    // First: check DB for vaults in mid-lifecycle states
     try {
       const inflight = await db.query(
         `SELECT vault FROM (
@@ -154,7 +151,7 @@ export async function recoverExistingRaffle(): Promise<void> {
         const state = info.state;
         if (state !== RaffleState.SETTLED && state !== RaffleState.INVALID) {
           const nowSecs = BigInt(Math.floor(Date.now() / 1000));
-          const maxClosesAt = nowSecs + 90000n; // 25 hours
+          const maxClosesAt = nowSecs + 90000n;
           if (state === RaffleState.OPEN && info.closesAt > maxClosesAt) {
             console.log(`[scheduler] Skipping vault with far-future closesAt (${info.closesAt}): ${vaultAddr}`);
             continue;
@@ -172,99 +169,467 @@ export async function recoverExistingRaffle(): Promise<void> {
   }
 }
 
-/**
- * The main scheduler loop. Runs on a fixed interval:
- * 1. If no active house raffle exists, create one
- * 2. Advance existing raffles through their lifecycle
- * 3. After settlement, schedule the next raffle
- */
+// ============ Pending TX management ============
+
+function setPendingTx(hash: `0x${string}`, operation: string): void {
+  pendingTx = { hash, operation, sentAt: Date.now(), tickCount: 0 };
+  console.log(`[scheduler] Pending TX set: ${operation} ${hash.slice(0, 14)}...`);
+}
+
+function clearPendingTx(reason: string): void {
+  if (pendingTx) {
+    console.log(`[scheduler] Pending TX cleared (${reason}): ${pendingTx.operation} ${pendingTx.hash.slice(0, 14)}...`);
+  }
+  pendingTx = null;
+}
+
+// ============ Main tick ============
+
 export async function runSchedulerTick(
   beneficiaries: Address[]
 ): Promise<void> {
-  // Prevent overlapping ticks
   if (tickInProgress) {
     console.log("[scheduler] Previous tick still running, skipping");
     return;
   }
 
-  // Skip tick during backoff window
   if (Date.now() < backoffUntil) {
     const secsLeft = Math.ceil((backoffUntil - Date.now()) / 1000);
-    console.log(`[scheduler] In backoff — skipping tick (${secsLeft}s remaining)`);
-    tickInProgress = false;
+    console.log(`[scheduler] In backoff -- skipping tick (${secsLeft}s remaining)`);
     return;
   }
 
   tickInProgress = true;
   try {
-    if (currentVault) {
-      const state = await withRetry(
-        () => advanceRaffle(currentVault!),
-        `advanceRaffle(${currentVault.slice(0, 10)}…)`
-      );
+    // ---- Step 1: Check pending TX ----
+    if (pendingTx) {
+      pendingTx.tickCount++;
+      console.log(`[scheduler] Pending TX "${pendingTx.operation}" tick ${pendingTx.tickCount}/${PENDING_TX_TIMEOUT_TICKS} hash=${pendingTx.hash.slice(0, 14)}...`);
 
-      if (state === RaffleState.SETTLED || state === RaffleState.INVALID) {
-        console.log("[scheduler] Raffle completed:", currentVault, "state:", RaffleState[state]);
-        currentVault = null;
+      if (pendingTx.tickCount >= PENDING_TX_TIMEOUT_TICKS) {
+        const alertMsg = `TX timeout: ${pendingTx.operation} ${pendingTx.hash.slice(0, 14)}... after ${pendingTx.tickCount} ticks`;
+        console.error(`[scheduler] ${alertMsg}`);
+        await sendAlert(alertMsg);
+        clearPendingTx("timeout");
+        // Fall through to let the state machine retry
+      } else {
+        // Check if the expected state change happened on-chain
+        const confirmed = await checkPendingTxConfirmed();
+        if (confirmed) {
+          clearPendingTx("confirmed");
+          // Reset failure tracking on success
+          if (consecutiveFailures > 0) {
+            console.log(`[scheduler] Recovered after ${consecutiveFailures} failure(s)`);
+            consecutiveFailures = 0;
+            backoffUntil = 0;
+          }
+          // Fall through to continue the state machine
+        } else {
+          // Still waiting -- return early
+          return;
+        }
       }
-      return;
     }
 
-    // No active raffle — check if one was created by a timed-out TX
-    await recoverExistingRaffle();
+    // ---- Step 2: Active vault exists -- advance it ----
     if (currentVault) {
-      console.log("[scheduler] Recovered raffle from timed-out TX:", currentVault);
-      setServerPhase("OPEN");
-      consecutiveFailures = 0;
-      backoffUntil = 0;
+      await advanceRaffle(currentVault);
       return;
     }
 
-    const raffleName = nextHouseRaffleName();
-    console.log(`[scheduler] Creating new house raffle: "${raffleName}"...`);
-    currentVault = await withRetry(
-      () => createHouseRaffle(beneficiaries, raffleName),
-      "createHouseRaffle"
-    );
-
-    saveRaffleMeta({
-      vault: currentVault,
-      name: raffleName,
-      description: config.raffle.description,
-      type: "house",
-      coverImage: randomCoverImage(),
-      creator: getAgentAddress(),
-      createdAt: new Date().toISOString(),
-    });
-
-    setServerPhase("OPEN");
-    console.log("[scheduler] House raffle active:", currentVault);
-
-    // Broadcast new raffle to WebSocket clients
-    try {
-      const info = await getRaffleInfo(currentVault);
-      const { formatUsd6 } = await import("./html.js");
-      broadcast({
-        type: "new_raffle",
-        vault: currentVault,
-        name: raffleName,
-        closesAt: Number(info.closesAt) * 1000,
-        ticketPrice: formatUsd6(config.raffle.ticketPriceUsd6),
-        raffleType: "house",
-      });
-    } catch {}
+    // ---- Step 3: No active vault -- creation state machine ----
+    await runCreationStateMachine(beneficiaries);
   } catch (error) {
-    // withRetry already logged and alerted — nothing more to do this tick
+    const msg = error instanceof Error ? error.message : String(error);
+    console.error(`[scheduler] Tick error: ${msg.slice(0, 200)}`);
+    consecutiveFailures++;
+    const backoffSecs = Math.min(60, consecutiveFailures * 15);
+    backoffUntil = Date.now() + backoffSecs * 1000;
+    const alertMsg = `Scheduler tick failed (${consecutiveFailures} consecutive): ${msg.slice(0, 120)}`;
+    console.error(`[scheduler] ${alertMsg} -- backing off ${backoffSecs}s`);
+    await sendAlert(alertMsg);
   } finally {
     tickInProgress = false;
   }
 }
 
-/**
- * Periodic health check: find OPEN vaults that are past their close time and close them.
- * Catches orphaned raffles that the scheduler missed (e.g. after a crash/restart).
- * Skips the current active vault — the scheduler handles that one.
- */
+// ============ Check if pending TX landed by reading on-chain state ============
+
+async function checkPendingTxConfirmed(): Promise<boolean> {
+  if (!pendingTx) return true;
+
+  try {
+    switch (pendingTx.operation) {
+      case "approve": {
+        // Check if allowance is now sufficient
+        const allowance = await getAllowance(config.contracts.factory);
+        const deposit = await getCreateDeposit();
+        return allowance >= deposit;
+      }
+      case "createRaffle": {
+        // Check if vault count increased
+        const newVault = await detectNewVault(creationVaultCountBefore);
+        if (newVault) {
+          // Raffle created! Set it as active.
+          currentVault = newVault;
+          creationPhase = "IDLE";
+
+          saveRaffleMeta({
+            vault: newVault,
+            name: creationRaffleName,
+            description: config.raffle.description,
+            type: "house",
+            coverImage: randomCoverImage(),
+            creator: getAgentAddress(),
+            createdAt: new Date().toISOString(),
+          });
+
+          // Write to DB
+          const db = await import("./db.js");
+          try {
+            await db.upsertRaffle({
+              vault: newVault,
+              name: creationRaffleName,
+              type: "house",
+              state: "OPEN",
+              pool: "0",
+              participants: 0,
+              ticketPrice: (Number(config.raffle.ticketPriceUsd6) / 1e6).toFixed(2),
+              closesAt: new Date(Date.now() + Number(config.raffle.duration) * 1000),
+              creator: getAgentAddress(),
+            });
+          } catch {}
+
+          setServerPhase("OPEN");
+          console.log("[scheduler] House raffle active:", newVault);
+
+          // Broadcast new raffle
+          try {
+            const info = await getRaffleInfo(newVault);
+            const { formatUsd6 } = await import("./html.js");
+            broadcast({
+              type: "new_raffle",
+              vault: newVault,
+              name: creationRaffleName,
+              closesAt: Number(info.closesAt) * 1000,
+              ticketPrice: formatUsd6(config.raffle.ticketPriceUsd6),
+              raffleType: "house",
+            });
+          } catch {}
+
+          return true;
+        }
+        return false;
+      }
+      case "closeRaffle": {
+        if (!currentVault) return true;
+        const state = await getVaultState(currentVault);
+        return state !== RaffleState.OPEN; // Moved past OPEN
+      }
+      case "requestDraw": {
+        if (!currentVault) return true;
+        const state = await getVaultState(currentVault);
+        return state !== RaffleState.CLOSED; // Moved past CLOSED
+      }
+      case "mockVrfFulfill": {
+        if (!currentVault) return true;
+        const state = await getVaultState(currentVault);
+        return state !== RaffleState.DRAWING; // Moved past DRAWING
+      }
+      case "distributePrizes": {
+        if (!currentVault) return true;
+        const state = await getVaultState(currentVault);
+        return state !== RaffleState.PAYOUT; // Moved past PAYOUT
+      }
+      case "claimDeposit": {
+        // claimDeposit is best-effort, always consider confirmed
+        return true;
+      }
+      case "distributeRefunds": {
+        if (!currentVault) return true;
+        // Refunds are one-shot; check if vault moved to SETTLED or state unchanged
+        // Since INVALID stays INVALID, just wait for TX timeout or assume success
+        return true;
+      }
+      default:
+        return true;
+    }
+  } catch (e) {
+    console.log(`[scheduler] checkPendingTxConfirmed error: ${String(e).slice(0, 100)}`);
+    return false;
+  }
+}
+
+// ============ Fire-and-forget advanceRaffle ============
+
+async function advanceRaffle(vault: Address): Promise<void> {
+  const info = await getRaffleInfo(vault);
+  const now = BigInt(Math.floor(Date.now() / 1000));
+
+  // Sync DB + broadcast
+  await syncRaffleState(vault, info);
+
+  const pool = (Number(info.totalPool) / 1e6).toFixed(2);
+  console.log(
+    `[lifecycle] ${vault.slice(0, 10)}... state=${stateNames[info.state]} pool=${pool} participants=${info.participantCount}`
+  );
+
+  switch (info.state) {
+    case RaffleState.OPEN: {
+      // Only set OPEN if we're not in a post-raffle display phase
+      const phase = getServerPhase().phase;
+      const postRafflePhases: ServerPhase[] = ["RESULT", "DISTRIB", "RESET", "STNDBY", "INVALID", "REFUND"];
+      if (!postRafflePhases.includes(phase)) {
+        setServerPhase("OPEN");
+      }
+      if (now >= info.closesAt && !pendingTx) {
+        // Small delay to let block.timestamp catch up
+        await new Promise((r) => setTimeout(r, 5000));
+        const hash = await sendCloseRaffleTx(vault);
+        setPendingTx(hash, "closeRaffle");
+        setServerPhase("DRAWING");
+      }
+      break;
+    }
+
+    case RaffleState.CLOSED: {
+      const minParticipants = Number(config.raffle.minUniqueParticipants);
+      if (info.participantCount < BigInt(minParticipants)) {
+        setServerPhase("INVALID");
+        console.log(
+          `[lifecycle] Raffle closed with only ${info.participantCount}/${minParticipants} participants -- going to INVALID`
+        );
+      } else {
+        setServerPhase("DRAWING");
+      }
+      if (!pendingTx) {
+        console.log(
+          `[lifecycle] Raffle closed with ${info.participantCount} participants. Requesting draw...`
+        );
+        const hash = await sendRequestDrawTx(vault);
+        setPendingTx(hash, "requestDraw");
+        try {
+          const db = await import("./db.js");
+          await db.upsertRaffle({ vault, drawTx: hash });
+        } catch {}
+      }
+      break;
+    }
+
+    case RaffleState.DRAWING: {
+      setServerPhase("DRAWING");
+      // Testnet: auto-fulfill mock VRF if available
+      const mockAddr = process.env.MOCK_VRF_DISPATCHER_ADDRESS;
+      if (mockAddr && !pendingTx) {
+        // Try to get requestId from DB or send fulfill blindly
+        try {
+          const db = await import("./db.js");
+          const dbRaffle = await db.getRaffle(vault);
+          if (dbRaffle?.vrf_request_id) {
+            const hash = await sendMockVrfFulfillTx(BigInt(dbRaffle.vrf_request_id));
+            if (hash) setPendingTx(hash, "mockVrfFulfill");
+          }
+        } catch {}
+      }
+      // On mainnet, Chainlink VRF pushes automatically. Nothing to do.
+      console.log("[lifecycle] Waiting for VRF callback...");
+      break;
+    }
+
+    case RaffleState.PAYOUT: {
+      if (!pendingTx) {
+        const hash = await sendDistributePrizesTx(vault);
+        setPendingTx(hash, "distributePrizes");
+      }
+      break;
+    }
+
+    case RaffleState.SETTLED: {
+      console.log("[scheduler] Raffle settled:", vault);
+      // Record settlement (winner, VRF proof, DB, broadcast) -- reads only, no TX wait
+      await recordSettlement(vault, info);
+      // Fire-and-forget claimDeposit
+      if (!pendingTx) {
+        try {
+          const hash = await sendClaimDepositTx(vault);
+          setPendingTx(hash, "claimDeposit");
+        } catch {}
+      }
+      // Clear the vault so next tick enters creation state machine
+      currentVault = null;
+      clearPendingTx("settled");
+      break;
+    }
+
+    case RaffleState.INVALID: {
+      setServerPhase("INVALID");
+      setTimeout(() => setServerPhase("REFUND"), 10000);
+      setTimeout(() => setServerPhase("RESET"), 25000);
+      setTimeout(() => setServerPhase("STNDBY"), 35000);
+      try {
+        const db = await import("./db.js");
+        await db.upsertRaffle({ vault, state: "INVALID", settledAt: new Date() });
+      } catch {}
+      // Auto-distribute refunds
+      if (info.participantCount > 0n && !pendingTx) {
+        try {
+          const hash = await sendDistributeRefundsTx(vault);
+          setPendingTx(hash, "distributeRefunds");
+        } catch (e) {
+          console.log("[lifecycle] Refunds already distributed or no entries");
+        }
+      }
+      // Fire-and-forget claimDeposit (50% refunded on invalid)
+      if (!pendingTx) {
+        try {
+          const hash = await sendClaimDepositTx(vault);
+          setPendingTx(hash, "claimDeposit");
+        } catch {}
+      }
+      // Clear vault
+      currentVault = null;
+      clearPendingTx("invalid-done");
+      break;
+    }
+  }
+}
+
+// ============ Creation state machine ============
+
+async function runCreationStateMachine(beneficiaries: Address[]): Promise<void> {
+  switch (creationPhase) {
+    case "IDLE": {
+      // Try to recover existing raffle first
+      await recoverExistingRaffle();
+      if (currentVault) {
+        console.log("[scheduler] Recovered raffle from timed-out TX:", currentVault);
+        setServerPhase("OPEN");
+        consecutiveFailures = 0;
+        backoffUntil = 0;
+        return;
+      }
+
+      // Check balance
+      const deposit = await getCreateDeposit();
+      const balance = await getAgentBalance();
+      if (balance < deposit) {
+        console.error(
+          `[scheduler] Insufficient balance: have $${(Number(balance) / 1e6).toFixed(2)}, need $${(Number(deposit) / 1e6).toFixed(2)}`
+        );
+        return;
+      }
+
+      // Check if we already have sufficient allowance
+      const allowance = await getAllowance(config.contracts.factory);
+      if (allowance >= deposit) {
+        // Skip approve, go straight to creating
+        creationRaffleName = nextHouseRaffleName();
+        creationVaultCountBefore = await getFactoryVaultCount();
+        creationPhase = "CREATING_RAFFLE";
+        console.log(`[scheduler] Allowance sufficient, sending createRaffle TX for "${creationRaffleName}"...`);
+        const hash = await sendCreateRaffleTx(beneficiaries, creationRaffleName);
+        setPendingTx(hash, "createRaffle");
+        return;
+      }
+
+      // Send approve TX
+      creationRaffleName = nextHouseRaffleName();
+      console.log(`[scheduler] Creating new house raffle: "${creationRaffleName}"...`);
+      console.log(`[scheduler] Approving deposit: $${(Number(deposit) / 1e6).toFixed(2)}`);
+      const hash = await sendApproveTx(config.contracts.paymentToken, config.contracts.factory, deposit);
+      setPendingTx(hash, "approve");
+      creationPhase = "CREATING_APPROVE";
+      break;
+    }
+
+    case "CREATING_APPROVE": {
+      // Waiting for approve TX -- pendingTx should be set
+      // If we get here with no pendingTx, it means approve was confirmed or timed out
+      const deposit = await getCreateDeposit();
+      const allowance = await getAllowance(config.contracts.factory);
+      if (allowance >= deposit) {
+        // Approve confirmed, send createRaffle
+        creationVaultCountBefore = await getFactoryVaultCount();
+        console.log(`[scheduler] Approve confirmed. Sending createRaffle TX...`);
+        const hash = await sendCreateRaffleTx(beneficiaries, creationRaffleName);
+        setPendingTx(hash, "createRaffle");
+        creationPhase = "CREATING_RAFFLE";
+      } else {
+        // Approve didn't land yet or timed out -- retry from IDLE
+        console.log("[scheduler] Approve not yet confirmed, retrying from IDLE");
+        creationPhase = "IDLE";
+      }
+      break;
+    }
+
+    case "CREATING_RAFFLE": {
+      // Waiting for createRaffle TX -- pendingTx should be set
+      // If we get here with no pendingTx, it means create was confirmed (vault set in checkPendingTxConfirmed)
+      // or timed out
+      if (currentVault) {
+        // Already set by checkPendingTxConfirmed
+        creationPhase = "IDLE";
+        return;
+      }
+
+      // Check if vault appeared (maybe TX confirmed between ticks)
+      const newVault = await detectNewVault(creationVaultCountBefore);
+      if (newVault) {
+        currentVault = newVault;
+        creationPhase = "IDLE";
+
+        saveRaffleMeta({
+          vault: newVault,
+          name: creationRaffleName,
+          description: config.raffle.description,
+          type: "house",
+          coverImage: randomCoverImage(),
+          creator: getAgentAddress(),
+          createdAt: new Date().toISOString(),
+        });
+
+        const db = await import("./db.js");
+        try {
+          await db.upsertRaffle({
+            vault: newVault,
+            name: creationRaffleName,
+            type: "house",
+            state: "OPEN",
+            pool: "0",
+            participants: 0,
+            ticketPrice: (Number(config.raffle.ticketPriceUsd6) / 1e6).toFixed(2),
+            closesAt: new Date(Date.now() + Number(config.raffle.duration) * 1000),
+            creator: getAgentAddress(),
+          });
+        } catch {}
+
+        setServerPhase("OPEN");
+        console.log("[scheduler] House raffle active:", newVault);
+
+        try {
+          const info = await getRaffleInfo(newVault);
+          const { formatUsd6 } = await import("./html.js");
+          broadcast({
+            type: "new_raffle",
+            vault: newVault,
+            name: creationRaffleName,
+            closesAt: Number(info.closesAt) * 1000,
+            ticketPrice: formatUsd6(config.raffle.ticketPriceUsd6),
+            raffleType: "house",
+          });
+        } catch {}
+      } else {
+        // Create TX didn't land yet or timed out -- retry from IDLE
+        console.log("[scheduler] createRaffle not yet confirmed, retrying from IDLE");
+        creationPhase = "IDLE";
+      }
+      break;
+    }
+  }
+}
+
+// ============ Orphan check (unchanged, uses blocking closeRaffle) ============
+
 async function orphanCheck(): Promise<void> {
   try {
     const db = await import("./db.js");
@@ -277,20 +642,18 @@ async function orphanCheck(): Promise<void> {
 
     for (const row of rows) {
       const vault = row.vault as Address;
-      if (vault === currentVault) continue; // scheduler owns this one
+      if (vault === currentVault) continue;
 
       let info;
       try {
         info = await getRaffleInfo(vault);
       } catch {
-        // Contract returns no data — stale DB entry from old deployment, mark invalid
         await db.upsertRaffle({ vault, state: "INVALID", settledAt: new Date() });
         console.log(`[scheduler] Orphan check: marked stale vault as INVALID: ${vault}`);
         continue;
       }
 
       if (info.state !== RaffleState.OPEN) {
-        // Already advanced on-chain — sync DB state
         await db.upsertRaffle({ vault, state: stateNames[info.state] || "UNKNOWN" });
         continue;
       }
@@ -308,9 +671,6 @@ async function orphanCheck(): Promise<void> {
   }
 }
 
-/**
- * Schedule orphanCheck at every 5-minute mark of the clock (:00, :05, :10 ...)
- */
 function startOrphanCheckCron(): void {
   const scheduleNext = () => {
     const now = Date.now();
@@ -324,32 +684,24 @@ function startOrphanCheckCron(): void {
   console.log("[scheduler] Orphan check cron started (runs at every 5-minute mark)");
 }
 
-/**
- * Start the scheduler loop
- */
+// ============ Start ============
+
 export async function startScheduler(
   beneficiaries: Address[]
 ): Promise<NodeJS.Timeout> {
   console.log(
-    `[scheduler] Starting with ${config.pollIntervalMs}ms poll interval`
+    `[scheduler] Starting with ${config.pollIntervalMs}ms poll interval (fire-and-forget mode)`
   );
 
-  // Recover any in-progress raffle from a previous run
   await recoverExistingRaffle();
-
-  // Start periodic orphan check
   startOrphanCheckCron();
 
   // Run first tick immediately
   await runSchedulerTick(beneficiaries);
 
-  // Then poll on interval
   return setInterval(() => runSchedulerTick(beneficiaries), config.pollIntervalMs);
 }
 
-/**
- * Get the current active vault address (for API)
- */
 export function getCurrentVault(): Address | null {
   return currentVault;
 }

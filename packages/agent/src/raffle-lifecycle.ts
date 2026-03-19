@@ -14,6 +14,261 @@ import { setServerPhase, getServerPhase } from "./scheduler.js";
 import { broadcast } from "./ws-hub.js";
 import { formatUsd6 } from "./html.js";
 
+// ============ Fire-and-forget TX senders (return hash immediately, no receipt wait) ============
+
+export async function sendCloseRaffleTx(vault: Address): Promise<`0x${string}`> {
+  console.log("[lifecycle] Sending closeRaffle TX:", vault);
+  const hash = await writeContract({
+    address: vault,
+    abi: RaffleVaultAbi,
+    functionName: "closeRaffle",
+  });
+  console.log("[lifecycle] closeRaffle TX sent:", hash);
+  return hash;
+}
+
+export async function sendRequestDrawTx(vault: Address): Promise<`0x${string}`> {
+  console.log("[lifecycle] Sending requestDraw TX:", vault);
+  const hash = await writeContract({
+    address: vault,
+    abi: RaffleVaultAbi,
+    functionName: "requestDraw",
+  });
+  console.log("[lifecycle] requestDraw TX sent:", hash);
+  return hash;
+}
+
+export async function sendMockVrfFulfillTx(requestId: bigint): Promise<`0x${string}` | null> {
+  const mockAddr = process.env.MOCK_VRF_DISPATCHER_ADDRESS as Address | undefined;
+  if (!mockAddr) return null;
+  try {
+    console.log(`[lifecycle] Sending mock VRF fulfill TX requestId=${requestId}...`);
+    const hash = await writeContract({
+      address: mockAddr,
+      abi: MockVRFDispatcherAbi,
+      functionName: "fulfillRequest",
+      args: [requestId],
+    });
+    console.log("[lifecycle] Mock VRF fulfill TX sent:", hash);
+    return hash;
+  } catch (e) {
+    console.log("[lifecycle] Mock VRF fulfill send failed:", String(e).slice(0, 120));
+    return null;
+  }
+}
+
+export async function sendDistributePrizesTx(vault: Address): Promise<`0x${string}`> {
+  console.log("[lifecycle] Sending distributePrizes TX:", vault);
+  const hash = await writeContract({
+    address: vault,
+    abi: RaffleVaultAbi,
+    functionName: "distributePrizes",
+  });
+  console.log("[lifecycle] distributePrizes TX sent:", hash);
+  return hash;
+}
+
+export async function sendClaimDepositTx(vault: Address): Promise<`0x${string}`> {
+  console.log("[lifecycle] Sending claimDeposit TX:", vault);
+  const hash = await writeContract({
+    address: config.contracts.factory,
+    abi: RaffleFactoryAbi,
+    functionName: "claimDeposit",
+    args: [vault],
+  });
+  console.log("[lifecycle] claimDeposit TX sent:", hash);
+  return hash;
+}
+
+export async function sendDistributeRefundsTx(vault: Address): Promise<`0x${string}`> {
+  console.log("[lifecycle] Sending distributeRefunds TX:", vault);
+  const hash = await writeContract({
+    address: vault,
+    abi: RaffleVaultAbi,
+    functionName: "distributeRefunds",
+  });
+  console.log("[lifecycle] distributeRefunds TX sent:", hash);
+  return hash;
+}
+
+export async function sendApproveTx(token: Address, spender: Address, amount: bigint): Promise<`0x${string}`> {
+  console.log(`[lifecycle] Sending approve TX: ${(Number(amount) / 1e6).toFixed(2)} to ${spender.slice(0, 10)}...`);
+  const hash = await writeContract({
+    address: token,
+    abi: ERC20Abi,
+    functionName: "approve",
+    args: [spender, amount],
+  });
+  console.log("[lifecycle] approve TX sent:", hash);
+  return hash;
+}
+
+export async function sendCreateRaffleTx(beneficiaries: Address[], name: string): Promise<`0x${string}`> {
+  // Duration aligns to the top of the next hour
+  const now = new Date();
+  const nextHour = new Date(now);
+  nextHour.setHours(now.getHours() + 1, 0, 0, 0);
+  const secsUntilNextHour = Math.floor((nextHour.getTime() - now.getTime()) / 1000);
+  const duration = secsUntilNextHour > 60 ? BigInt(secsUntilNextHour) : config.raffle.duration;
+
+  console.log(`[lifecycle] Sending createRaffle TX... closes in ${secsUntilNextHour}s (at top of hour)`);
+  const params = {
+    name,
+    description: config.raffle.description,
+    ticketPriceUsd6: config.raffle.ticketPriceUsd6,
+    maxEntriesPerUser: config.raffle.maxEntriesPerUser,
+    numWinners: config.raffle.numWinners,
+    winnerShareBps: config.raffle.winnerShareBps,
+    beneficiaryShareBps: config.raffle.beneficiaryShareBps,
+    beneficiaryOptions: beneficiaries,
+    duration,
+    targetPoolSize: config.raffle.targetPoolSize,
+    minUniqueParticipants: config.raffle.minUniqueParticipants,
+    agentsOnly: config.raffle.agentsOnly,
+  };
+
+  const hash = await writeContract({
+    address: config.contracts.factory,
+    abi: RaffleFactoryAbi,
+    functionName: "createRaffle",
+    args: [params],
+  });
+  console.log("[lifecycle] createRaffle TX sent:", hash);
+  return hash;
+}
+
+// ============ Read helpers for fire-and-forget scheduler ============
+
+export async function getAllowance(spender: Address): Promise<bigint> {
+  const owner = getAgentAddress();
+  return (await publicClient.readContract({
+    address: config.contracts.paymentToken,
+    abi: ERC20Abi,
+    functionName: "allowance",
+    args: [owner, spender],
+  })) as bigint;
+}
+
+export async function getCreateDeposit(): Promise<bigint> {
+  return (await publicClient.readContract({
+    address: config.contracts.factory,
+    abi: RaffleFactoryAbi,
+    functionName: "calculateDeposit",
+    args: [config.raffle.targetPoolSize],
+  })) as bigint;
+}
+
+export async function getFactoryVaultCount(): Promise<bigint> {
+  return (await publicClient.readContract({
+    address: config.contracts.factory,
+    abi: RaffleFactoryAbi,
+    functionName: "getDeployedVaultsCount",
+  })) as bigint;
+}
+
+export async function detectNewVault(countBefore: bigint): Promise<Address | null> {
+  const countNow = await getFactoryVaultCount();
+  if (countNow > countBefore) {
+    // Get the latest vault
+    const vault = (await publicClient.readContract({
+      address: config.contracts.factory,
+      abi: RaffleFactoryAbi,
+      functionName: "getDeployedVault",
+      args: [countNow - 1n],
+    })) as Address;
+    // Verify it belongs to us
+    const creator = (await publicClient.readContract({
+      address: vault,
+      abi: RaffleVaultAbi,
+      functionName: "creator",
+    })) as Address;
+    if (creator.toLowerCase() === getAgentAddress().toLowerCase()) {
+      return vault;
+    }
+  }
+  return null;
+}
+
+/** Sync DB + broadcast for a given raffle. Used by the scheduler's advanceRaffle. */
+export async function syncRaffleState(vault: Address, info: RaffleInfo): Promise<void> {
+  try {
+    await db.upsertRaffle({
+      vault,
+      state: stateNames[info.state] || "UNKNOWN",
+      pool: (Number(info.totalPool) / 1e6).toFixed(2),
+      participants: Number(info.participantCount),
+      closesAt: new Date(Number(info.closesAt) * 1000),
+    });
+    if (info.participantCount > 0n && info.state === RaffleState.OPEN) {
+      await syncParticipants(vault, info.participantCount);
+    }
+  } catch {}
+
+  const pool = (Number(info.totalPool) / 1e6).toFixed(2);
+  const participants = info.participantCount.toString();
+  const closesAtMs = Number(info.closesAt) * 1000;
+
+  const meta = (await import("./raffle-store.js")).getRaffleMeta(vault);
+  broadcast({
+    type: "tick",
+    vault,
+    pool,
+    participants,
+    closesAt: closesAtMs,
+    name: meta?.name || "House Raffle",
+    ticketPrice: formatUsd6(config.raffle.ticketPriceUsd6),
+  });
+}
+
+/** Record settlement results (winner, VRF proof, DB, broadcast). Called once from scheduler. */
+export async function recordSettlement(vault: Address, info: RaffleInfo): Promise<void> {
+  const pool = (Number(info.totalPool) / 1e6).toFixed(2);
+  const participants = info.participantCount.toString();
+
+  const vrfProof = await getVrfProof(vault);
+  const vrfRequestId = (await db.getRaffle(vault))?.vrf_request_id || null;
+
+  try {
+    await syncParticipants(vault, info.participantCount);
+    const winners = (await publicClient.readContract({
+      address: vault, abi: RaffleVaultAbi, functionName: "getWinners",
+    })) as string[];
+    if (winners.length > 0) {
+      const winnerName = await resolveAgentName(winners[0] as Address);
+      const vrf = vrfProof ? { requestId: vrfRequestId || "", seed: vrfProof.seed, fulfillmentTx: vrfProof.fulfillmentTx } : undefined;
+      await db.recordResult(vault, winners[0], winnerName, pool, vrf);
+      if (vrfProof) console.log(`[lifecycle] VRF seed: ${vrfProof.seed}, fulfillment: ${vrfProof.fulfillmentTx}`);
+      console.log(`[lifecycle] Winner: ${winnerName || winners[0].slice(0, 10)} won $${pool}`);
+      setServerPhase("RESULT", { address: winners[0], name: winnerName, prize: pool });
+
+      // Auto-advance: RESULT -> DISTRIB -> RESET -> STNDBY
+      setTimeout(() => setServerPhase("DISTRIB"), 15000);
+      setTimeout(() => setServerPhase("RESET"), 25000);
+      setTimeout(() => setServerPhase("STNDBY"), 35000);
+    }
+    await db.upsertRaffle({ vault, state: "SETTLED", settledAt: new Date() });
+
+    // Broadcast settled event for history table
+    const meta = (await import("./raffle-store.js")).getRaffleMeta(vault);
+    const dt = new Date();
+    const ended = `${String(dt.getMonth() + 1).padStart(2, '0')}/${String(dt.getDate()).padStart(2, '0')} ${String(dt.getHours()).padStart(2, '0')}:${String(dt.getMinutes()).padStart(2, '0')}`;
+    broadcast({
+      type: "settled",
+      vault,
+      name: meta?.name || "House Raffle",
+      pool,
+      participants,
+      winner: winners.length > 0 ? winners[0] : null,
+      winnerName: winners.length > 0 ? (await resolveAgentName(winners[0] as Address)) : null,
+      prize: pool,
+      state: "SETTLED",
+      ended,
+    });
+  } catch (e) {
+    console.log("[lifecycle] recordSettlement error:", String(e).slice(0, 100));
+  }
+}
+
 /** Resolve an address to an agent name via on-chain AgentRegistry + cache in DB.
  *  Refreshes on-chain data if DB entry is older than 4 hours. */
 async function resolveAgentName(address: Address): Promise<string | null> {
@@ -554,7 +809,7 @@ export async function advanceRaffle(vault: Address): Promise<RaffleState> {
     case RaffleState.OPEN: {
       // Only set OPEN if we're not in a post-raffle display phase
       const currentPhase = getServerPhase().phase;
-      const postRafflePhases = ["RESULT", "DISTRIB", "INVALID", "REFUND"];
+      const postRafflePhases = ["RESULT", "DISTRIB", "RESET", "STNDBY", "INVALID", "REFUND"];
       if (!postRafflePhases.includes(currentPhase)) {
         setServerPhase("OPEN");
       }
@@ -611,9 +866,10 @@ export async function advanceRaffle(vault: Address): Promise<RaffleState> {
           console.log(`[lifecycle] Winner: ${winnerName || winners[0].slice(0,10)} won $${(Number(info.totalPool) / 1e6).toFixed(2)}`);
           setServerPhase("RESULT", { address: winners[0], name: winnerName, prize: (Number(info.totalPool) / 1e6).toFixed(2) });
 
-          // Auto-advance: RESULT → DISTRIB → RESET
+          // Auto-advance: RESULT -> DISTRIB -> RESET -> STNDBY
           setTimeout(() => setServerPhase("DISTRIB"), 15000);
           setTimeout(() => setServerPhase("RESET"), 25000);
+          setTimeout(() => setServerPhase("STNDBY"), 35000);
         }
         await db.upsertRaffle({ vault, state: "SETTLED", settledAt: new Date() });
 
@@ -653,6 +909,7 @@ export async function advanceRaffle(vault: Address): Promise<RaffleState> {
       setServerPhase("INVALID");
       setTimeout(() => setServerPhase("REFUND"), 10000);
       setTimeout(() => setServerPhase("RESET"), 25000);
+      setTimeout(() => setServerPhase("STNDBY"), 35000);
       try { await db.upsertRaffle({ vault, state: "INVALID", settledAt: new Date() }); } catch {}
       // Auto-distribute refunds to all participants
       if (info.participantCount > 0n) {

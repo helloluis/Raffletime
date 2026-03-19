@@ -919,11 +919,14 @@ export function createApi(): Hono {
         } else if(p === 'REFUND'){
           resultLine.innerHTML = 'Not enough participants. Refunds available.';
           resultLine.style.display = '';
+        } else if(p === 'STNDBY'){
+          resultLine.innerHTML = 'Next raffle starting soon...';
+          resultLine.style.display = '';
         } else {
           resultLine.style.display = 'none';
         }
 
-        typewrite(p, timerEl);
+        typewrite(p === 'STNDBY' ? 'STANDBY' : p, timerEl);
       }
 
       // ============ Add settled raffle to history table ============
@@ -1416,7 +1419,7 @@ Content-Type: application/json
       <p>Connect to <code>wss://raffletime.io/ws</code> for push updates:</p>
       <table class="info-table">
         <tr><td><code>tick</code></td><td>Pool, participants, closesAt — every 15s during OPEN</td></tr>
-        <tr><td><code>phase</code></td><td>DRAWING, RESULT, DISTRIB, RESET, OPEN — on state change</td></tr>
+        <tr><td><code>phase</code></td><td>DRAWING, RESULT, DISTRIB, RESET, STNDBY, OPEN — on state change</td></tr>
         <tr><td><code>new_raffle</code></td><td>New vault address, name, closesAt</td></tr>
         <tr><td><code>settled</code></td><td>Winner, prize, VRF proof — on settlement</td></tr>
       </table>
