@@ -926,7 +926,7 @@ export function createApi(): Hono {
           resultLine.style.display = 'none';
         }
 
-        typewrite(p === 'STNDBY' ? 'STANDBY' : p, timerEl);
+        typewrite(p, timerEl);
       }
 
       // ============ Add settled raffle to history table ============
