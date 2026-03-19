@@ -160,14 +160,14 @@ export async function fundPlayers(
         const hash = await treasuryWallet.writeContract({
           address: config.paymentToken, abi: ERC20_ABI, functionName: "mint",
           args: [player.address as Address, needed],
-        chain } as any);
+        } as any);
         await publicClient.waitForTransactionReceipt({ hash });
         console.log(`  ${player.name}: minted $${(Number(needed) / (10 ** tokenDecimals)).toFixed(2)}`);
       } else {
         const hash = await treasuryWallet.writeContract({
           address: config.paymentToken, abi: ERC20_ABI, functionName: "transfer",
           args: [player.address as Address, needed],
-        chain } as any);
+        } as any);
         await publicClient.waitForTransactionReceipt({ hash });
         console.log(`  ${player.name}: transferred $${(Number(needed) / (10 ** tokenDecimals)).toFixed(2)}`);
       }
@@ -209,7 +209,7 @@ export async function registerPlayers(seedPassword: string): Promise<void> {
       const approveHash = await wallet.writeContract({
         address: config.paymentToken, abi: ERC20_ABI, functionName: "approve",
         args: [config.agentRegistry, bond],
-      chain } as any);
+      } as any);
       await publicClient.waitForTransactionReceipt({ hash: approveHash });
     }
 
@@ -218,7 +218,7 @@ export async function registerPlayers(seedPassword: string): Promise<void> {
     const regHash = await wallet.writeContract({
       address: config.agentRegistry, abi: AGENT_REG_ABI, functionName: "registerAgent",
       args: [uri, bond],
-    chain } as any);
+    } as any);
     await publicClient.waitForTransactionReceipt({ hash: regHash });
 
     updatePlayer(player.index, {
@@ -281,7 +281,7 @@ export async function enterRaffle(
         const approveHash = await wallet.writeContract({
           address: config.paymentToken, abi: ERC20_ABI, functionName: "approve",
           args: [vault, ticketPrice],
-        chain } as any);
+        } as any);
         await publicClient.waitForTransactionReceipt({ hash: approveHash });
         await new Promise(r => setTimeout(r, 1500)); // breathe between approve and enter
 
@@ -289,7 +289,7 @@ export async function enterRaffle(
         const enterHash = await wallet.writeContract({
           address: vault, abi: VAULT_ABI, functionName: "enterRaffle",
           args: [config.paymentToken, beneficiary],
-        chain } as any);
+        } as any);
         await publicClient.waitForTransactionReceipt({ hash: enterHash });
 
         // Breathe between tickets
@@ -342,7 +342,7 @@ export async function rebalancePlayers(
     const hash = await wallet.writeContract({
       address: config.paymentToken, abi: ERC20_ABI, functionName: "transfer",
       args: [poorPlayer.player.address as Address, needed],
-    chain } as any);
+    } as any);
     await publicClient.waitForTransactionReceipt({ hash });
 
     donor.balance -= needed;
@@ -372,7 +372,7 @@ export async function sweepWinnings(
       const hash = await wallet.writeContract({
         address: config.paymentToken, abi: ERC20_ABI, functionName: "transfer",
         args: [coldWallet, sweepAmount],
-      chain } as any);
+      } as any);
       await publicClient.waitForTransactionReceipt({ hash });
       console.log(`  ${p.name}: swept $${formatUsd6(sweepAmount)} → cold wallet`);
     }
