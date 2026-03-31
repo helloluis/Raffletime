@@ -52,7 +52,7 @@ export const config = {
   pollIntervalMs: parseInt(process.env.POLL_INTERVAL_MS || "15000"), // 15 seconds
 
   // Alerts — Beaniebot push API
-  alertWebhookUrl: process.env.ALERT_WEBHOOK_URL || "https://beanie.cryptoday.live/api/alerts/push",
+  alertWebhookUrl: process.env.ALERT_WEBHOOK_URL || "",
   alertApiKey: process.env.ALERT_API_KEY || "",
 
   // Server
